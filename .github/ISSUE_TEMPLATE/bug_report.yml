@@ -1,0 +1,67 @@
+name: 不具合の報告
+description: lm が期待どおりに動かないときに報告します。
+body:
+  - type: markdown
+    attributes:
+      value: |
+        この Issue では不具合の報告だけを受け付けています。脆弱性は Issue に書かず、Security タブの非公開の報告から知らせてください。
+  - type: input
+    id: version
+    attributes:
+      label: lm version
+      description: "`lm version` の出力を貼ってください。"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: OS と CPU
+      description: "例: macOS 15 / arm64、Ubuntu 24.04 / amd64"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: 入れ方
+      options:
+        - GitHub Release のバイナリ
+        - go install
+        - ソースからのビルド
+        - その他
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 再現手順
+      description: 打ったコマンドを順に書いてください。
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期待した結果
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 実際の結果と終了コード
+      description: 出力と、`echo $?` で確かめた終了コードを貼ってください。
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: export
+    attributes:
+      label: 再現データ（任意）
+      description: 再現に必要なら `lm export` の出力を貼ってください。秘密情報を含む行は除いてください。
+      render: json
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: 確認
+      options:
+        - label: 貼った出力やデータに、トークン・パスワード・社外秘の情報が含まれていないことを確かめました。
+          required: true

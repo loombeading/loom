@@ -1,0 +1,96 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v0.*"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Point GOCACHE/GOMODCACHE at shared dirs
+        shell: bash
+        run: | # zizmor: ignore[github-env] values are fixed $HOME-derived paths, not attacker-controlled
+          mkdir -p "${HOME}/.cache/go-build" "${HOME}/.cache/go-mod"
+          echo "GOCACHE=${HOME}/.cache/go-build" >> "$GITHUB_ENV"
+          echo "GOMODCACHE=${HOME}/.cache/go-mod" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Resolve version
+        id: version
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: return require('./.github/scripts/release.cjs').runResolveVersion({ context, core })
+
+      - name: Build darwin/linux x amd64/arm64
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          export SOURCE_DATE_EPOCH
+          rm -rf dist
+          scripts/release-build.sh "$VERSION" dist
+
+      - name: SBOM and SHA256SUMS
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        with:
+          script: |
+            return require('./.github/scripts/release.cjs').runAssemble({ context, core, exec, version: process.env.VERSION })
+
+      - name: Check Formula/lm.rb against the built binaries
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          scripts/brew-formula.sh "$VERSION" dist/SHA256SUMS > "${RUNNER_TEMP}/lm.rb"
+          diff -u Formula/lm.rb "${RUNNER_TEMP}/lm.rb"
+
+      - name: Upload dry-run artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: lm-dryrun
+          path: dist/
+          if-no-files-found: error
+
+      - name: Attest build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: dist/SHA256SUMS
+
+      - name: Attach assets to the draft release
+        if: github.event_name == 'push'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TAG: ${{ github.ref_name }}
+        with:
+          script: |
+            return require('./.github/scripts/release.cjs').runAttach({ github, context, core, tag: process.env.TAG })

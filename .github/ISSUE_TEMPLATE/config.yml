@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 脆弱性の非公開の報告
+    url: https://github.com/loombeading/loom/security/advisories/new
+    about: 脆弱性は Issue に書かず、こちらから非公開で知らせてください。
+  - name: 使い方
+    url: https://github.com/loombeading/loom/blob/main/docs/tutorial.md
+    about: 使い方はチュートリアルで確かめてください。
