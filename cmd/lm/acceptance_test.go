@@ -841,13 +841,12 @@ func TestAcceptanceReadOnlyModeRejectsWritesAllowsReads(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	setIsolatedXDGHome(t)
-	t.Setenv("LM_READONLY", "0")
 	if _, errS, code := runCmd(t, []string{"init"}, ""); code != 0 {
 		t.Fatalf("init: exit code = %d, stderr = %q", code, errS)
 	}
 	id := mustCreateBead(t, "--title", "t")
 
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 
 	for _, args := range [][]string{
 		{"update", "--claim", id},
@@ -858,10 +857,10 @@ func TestAcceptanceReadOnlyModeRejectsWritesAllowsReads(t *testing.T) {
 	} {
 		out, errS, code := runCmd(t, args, "")
 		if code != 1 {
-			t.Errorf("%v under LM_READONLY=1: exit code = %d, want 1", args, code)
+			t.Errorf("%v on a read-only DB: exit code = %d, want 1", args, code)
 		}
 		if errS == "" && !strings.Contains(out, "Rejected:") {
-			t.Errorf("%v under LM_READONLY=1: no error message on stdout or stderr (stdout=%q, stderr=%q)", args, out, errS)
+			t.Errorf("%v on a read-only DB: no error message on stdout or stderr (stdout=%q, stderr=%q)", args, out, errS)
 		}
 	}
 
@@ -874,7 +873,7 @@ func TestAcceptanceReadOnlyModeRejectsWritesAllowsReads(t *testing.T) {
 	} {
 		_, errS, code := runCmd(t, args, "")
 		if code != 0 {
-			t.Errorf("%v under LM_READONLY=1: exit code = %d, stderr = %q, want a normal read", args, code, errS)
+			t.Errorf("%v on a read-only DB: exit code = %d, stderr = %q, want a normal read", args, code, errS)
 		}
 	}
 }

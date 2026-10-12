@@ -258,11 +258,11 @@ not valid json`
 
 func TestImportRejectedUnderReadOnly(t *testing.T) {
 	initBeadsDir(t)
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 	jsonl := `{"_type":"bead","id":"g7777777777777777777777777","namespace":"lm","title":"x","status":"open","priority":2,"type":"task","labels":[],"created_at":"2026-01-01T00:00:00.000Z","updated_at":"2026-01-01T00:00:00.000Z"}`
 	_, _, code := runCmd(t, []string{"import", "-"}, jsonl)
 	if code == 0 {
-		t.Fatalf("expected import to be rejected under LM_READONLY")
+		t.Fatalf("expected import to be rejected on a read-only DB")
 	}
 }
 

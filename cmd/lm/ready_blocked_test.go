@@ -251,19 +251,18 @@ func TestReadyClaimReadOnlyModeRejected(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	setIsolatedXDGHome(t)
-	t.Setenv("LM_READONLY", "0")
 	if _, errS, code := runCmd(t, []string{"init"}, ""); code != 0 {
 		t.Fatalf("init: exit code = %d, stderr = %q", code, errS)
 	}
 	mustCreateBead(t, "--title", "t")
 
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 	out, errS, code := runCmd(t, []string{"ready", "--claim"}, "")
 	if code != 1 {
-		t.Errorf("ready --claim under LM_READONLY=1: exit code = %d, want 1", code)
+		t.Errorf("ready --claim on a read-only DB: exit code = %d, want 1", code)
 	}
 	if errS == "" && !strings.Contains(out, "Error:") {
-		t.Errorf("ready --claim under LM_READONLY=1: no error message (stdout=%q, stderr=%q)", out, errS)
+		t.Errorf("ready --claim on a read-only DB: no error message (stdout=%q, stderr=%q)", out, errS)
 	}
 }
 

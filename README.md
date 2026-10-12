@@ -18,13 +18,13 @@ Loom は、AI コーディングエージェントが自分でタスクを取っ
 
 経路は 4 つあり、どれも `lm version` で導入結果を確認できます。
 
-最初の版はまだリリースしていません。(a)〜(c) はリリースのタグと Release を使うので、最初の版が [Releases](https://github.com/loombeading/loom/releases) に載るまでは使えません。それまでは (d) で導入してください。
+リリースした版は [Releases](https://github.com/loombeading/loom/releases) に載っています。検証付きで導入するには、版を固定した (b) の `go install`（取得したソースを Go のチェックサムデータベースで照合します）か、版を指定した (c) の `install.sh --release <版>`（SHA-256 と attestation の両方を検証します）を使ってください。(d) はソースを変更して確かめる開発者向けです。
 
-### (a) Homebrew（最初のリリース後）
+### (a) Homebrew
 
-formula の実体 `Formula/lm.rb` は各版のリリース時にその版のチェックサムから生成してタグの木に入れるもので、最初の版を出すまではリポジトリにありません。
+formula の実体 `Formula/lm.rb` は、各版のリリース時にその版のチェックサムから生成してリポジトリの木に入れます。
 
-最初の版を出したあとは、macOS と Linux の Homebrew でこのリポジトリを tap として追加して入れます。formula は (c) と同じ Release のバイナリを、版ごとに固定した SHA-256 で照合してから配置します。
+macOS と Linux の Homebrew でこのリポジトリを tap として追加して入れます。formula は (c) と同じ Release のバイナリを、版ごとに固定した SHA-256 で照合してから配置します。
 
 ```sh
 brew tap loombeading/loom https://github.com/loombeading/loom
@@ -33,17 +33,18 @@ brew install loombeading/loom/lm
 
 版を上げるときは `brew upgrade loombeading/loom/lm` を実行します。
 
-### (b) `go install`（最初のリリース後・clone せずにリリースのタグからビルド）
+### (b) `go install`（clone せずにリリースのタグからビルド）
 
-Go が入っていれば、これがいちばん手早い方法です。リポジトリを clone せず、Go のモジュールプロキシからタグの版のソースを取ってビルドします。
+Go が入っていれば、これがいちばん手早い方法です。リポジトリを clone せず、Go のモジュールプロキシからタグの版のソースを取ってビルドします。取得したソースは Go のチェックサムデータベース（`sum.golang.org`）の記録と照合され、一致しなければビルドせずに止まります。
 
 ```sh
-go install github.com/loombeading/loom/cmd/lm@latest
+# 版を固定して入れる（tag は Releases ページに載っている版のタグに置き換える）
+go install github.com/loombeading/loom/cmd/lm@v0.YYMM.N
 ```
 
-タグは CalVer（`v0.YYMM.N`）で、メジャー版を 0 に固定しているので、`@latest` がそのまま最新リリースを指します。`lm version` の `<版>` は Release のバイナリと同じタグになります。モジュールのソースには git の情報が含まれないので、`<コミット>` と `<日付>` は Release のバイナリと同じく `-` と表示されます。
+タグは CalVer（`v0.YYMM.N`）で、メジャー版を 0 に固定しているので、`@latest` を指定すると最新リリースが入ります。版を固定すると、どの版を入れたかがコマンドに残り、読んだリリースノートと入る版が一致します。`lm version` の `<版>` は Release のバイナリと同じタグになります。モジュールのソースには git の情報が含まれないので、`<コミット>` と `<日付>` は Release のバイナリと同じく `-` と表示されます。
 
-### (c) GitHub Release から取得して検証する（最初のリリース後）
+### (c) GitHub Release から取得して検証する
 
 Release にはバイナリと SHA-256 のチェックサム一覧、Sigstore keyless 署名（GitHub artifact attestation）が同梱されています。ダウンロードしたら、チェックサムと attestation の両方を確かめてから配置してください。
 
@@ -63,10 +64,12 @@ curl -fsSLO "https://raw.githubusercontent.com/loombeading/loom/${tag}/install.s
 既定の置き場所は `~/bin/lm` です。`~/bin` が無ければ `install.sh` が作りますが、PATH への追加は行わないので、`lm` をコマンド名で呼べるように `~/bin` を PATH に入れておいてください（例: シェルの設定ファイルに `export PATH="$HOME/bin:$PATH"` を書く）。PATH の通ったほかの場所に置くなら `--dest` で指定します。
 
 ```sh
-# 最新の Release を取得・検証して ~/bin/lm に置く
-bash install.sh
-# 版を指定する・置き場所を変える（tag は Releases ページに載っている版のタグ）
+# 版を指定して Release を取得・検証し、~/bin/lm に置く（tag は Releases ページに載っている版のタグ）
+bash install.sh --release "$tag"
+# 置き場所を変える
 bash install.sh --release "$tag" --dest /usr/local/bin/lm
+# 最新の Release を取得・検証して置く
+bash install.sh
 # Release を使わずソースからビルドして置く（go install）
 bash install.sh --source
 ```
@@ -107,7 +110,7 @@ chmod +x "$asset"
 mv "$asset" "$HOME/bin/lm"
 ```
 
-### (d) clone したリポジトリからビルド（いま使える経路）
+### (d) clone したリポジトリからビルド
 
 リポジトリを clone し、その根で次を実行します。
 
@@ -119,11 +122,11 @@ go install ./cmd/lm
 
 `$GOBIN`（未設定なら `$GOPATH/bin`）にビルドして配置します。`lm version` の `<版>` は直近のタグから Go が作る擬似版（作業木に変更があれば末尾に `+dirty`）になり、`<コミット>` と `<日付>` には checkout しているコミットが入ります。
 
-ソースを変更して確かめる開発者向けの手順は、導入とは別に次のとおりです（Release と同じく cgo を使わずにビルドし、全テストを走らせます）。
+ソースを変更して確かめる開発者向けの手順は、導入とは別に次のとおりです（Release と同じく cgo を使わずにビルドし、全テストを走らせます）。テストは時刻を `LM_NOW` で固定するので、ビルドタグ `lmtestclock` を付けて走らせます。このタグの無いバイナリ（Release を含む）は `LM_NOW` を読みません。
 
 ```sh
 CGO_ENABLED=0 go build -trimpath ./cmd/lm
-go test ./...
+go test -tags lmtestclock ./...
 ```
 
 ### 導入確認
@@ -133,7 +136,7 @@ $ lm version
 lm v0.YYMM.N (- -)
 ```
 
-括弧の中はビルド元のコミット（先頭 9 桁）とその日付で、版とともに導入したものに応じて変わります。(b) の `go install ...@latest` と (a)・(c) の Release のバイナリはコミットの情報を埋め込まないので、どれも `-` になります。コミットは版のタグから辿れます。(d) の clone したリポジトリからのビルドでは、checkout しているコミットとその日付が入ります（例: `(6ebd72c31 2026-10-01)`）。
+括弧の中はビルド元のコミット（先頭 9 桁）とその日付で、版とともに導入したものに応じて変わります。(b) の `go install` と (a)・(c) の Release のバイナリはコミットの情報を埋め込まないので、どれも `-` になります。コミットは版のタグから辿れます。(d) の clone したリポジトリからのビルドでは、checkout しているコミットとその日付が入ります（例: `(6ebd72c31 2026-10-01)`）。
 
 ### 版を上げたとき
 

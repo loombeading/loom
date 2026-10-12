@@ -15,7 +15,7 @@ var leadingHeadingRe = regexp.MustCompile(`^( {0,3})#`)
 var leadingFenceRe = regexp.MustCompile("^( {0,3})(```|~~~)")
 
 func Escape(s string) string {
-	s = escapeInline(s)
+	s = EscapeInline(s)
 	if leadingMarkdownRe.MatchString(s) {
 		s = "\\" + s
 	}
@@ -30,7 +30,7 @@ func normalizeLineBreaks(s, repl string) string {
 	return s
 }
 
-func escapeInline(s string) string {
+func EscapeInline(s string) string {
 	s = normalizeLineBreaks(s, " ")
 	s = strings.ReplaceAll(s, "|", `\|`)
 	s = strings.ReplaceAll(s, "`", "\\`")

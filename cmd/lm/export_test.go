@@ -70,13 +70,13 @@ func TestExportRunsUnderReadOnly(t *testing.T) {
 	initBeadsDir(t)
 	mustCreateBead(t, "--title", "a")
 
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 	out, errS, code := runCmd(t, []string{"export"}, "")
 	if code != 0 {
-		t.Fatalf("export under LM_READONLY=1: exit code = %d, stderr = %q", code, errS)
+		t.Fatalf("export on a read-only DB: exit code = %d, stderr = %q", code, errS)
 	}
 	if !strings.Contains(out, `"_type":"bead"`) {
-		t.Errorf("export under LM_READONLY=1 produced no bead row: %q", out)
+		t.Errorf("export on a read-only DB produced no bead row: %q", out)
 	}
 }
 

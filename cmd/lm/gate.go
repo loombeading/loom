@@ -260,7 +260,7 @@ func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx,
 			exit = 1
 			continue
 		}
-		fmt.Fprintf(stdout, "- %s: %s\n", verb, domain.DisplayID(namespace, id, n))
+		fmt.Fprintf(stdout, "- %s: %s\n", verb, output.EscapeInline(domain.DisplayID(namespace, id, n)))
 		cancelledIDs = append(cancelledIDs, cancelled...)
 		for _, nid := range newly {
 			newlyReadyIDs[nid] = true
@@ -370,7 +370,7 @@ func runGateSweep(args []string, stdout, stderr io.Writer) int {
 	}
 
 	for _, g := range resolved {
-		fmt.Fprintf(stdout, "- Auto-resolved: %s\n", domain.DisplayID(g.Namespace, g.ID, n))
+		fmt.Fprintf(stdout, "- Auto-resolved: %s\n", output.EscapeInline(domain.DisplayID(g.Namespace, g.ID, n)))
 	}
 
 	newlyReadyIDs := make(map[string]bool, len(newly))
@@ -555,7 +555,7 @@ func writeGateEntry(stdout io.Writer, sec gateSection, e domain.GateListEntry, n
 		return err
 	}
 	fmt.Fprintln(stdout, l)
-	auxLines, err := sec.aux(e, domain.DisplayID(e.Namespace, e.ID, n))
+	auxLines, err := sec.aux(e, output.EscapeInline(domain.DisplayID(e.Namespace, e.ID, n)))
 	if err != nil {
 		return err
 	}
@@ -614,7 +614,7 @@ func gateProbeLabels(labels []string, kind string) []string {
 }
 
 func gateLine(e domain.GateListEntry, resolver *domain.AliasResolver, graph map[string]domain.EstimateBead, vias []gateVia, eff map[string]domain.EffectivePriority, effSources map[string]string, n domain.ShortIDs) (string, error) {
-	gateID := domain.DisplayID(e.Namespace, e.ID, n)
+	gateID := output.EscapeInline(domain.DisplayID(e.Namespace, e.ID, n))
 	ids, err := blockingDisplayIDs(resolver, e.Blocking, n)
 	if err != nil {
 		return "", err
@@ -628,7 +628,7 @@ func gateLine(e domain.GateListEntry, resolver *domain.AliasResolver, graph map[
 		return "", err
 	}
 	if src, ok := effSources[e.ID]; ok {
-		viaText += fmt.Sprintf("  eff=P%d(%s)", eff[e.ID].Priority, src)
+		viaText += fmt.Sprintf("  eff=P%d(%s)", eff[e.ID].Priority, output.EscapeInline(src))
 	}
 	return line + viaText, nil
 }
@@ -699,7 +699,7 @@ func gatePrereqAux(n domain.ShortIDs) func(domain.GateListEntry, string) ([]stri
 		}
 		ids := make([]string, len(e.PrereqBlockers))
 		for i, bl := range e.PrereqBlockers {
-			ids[i] = domain.DisplayID(bl.Namespace, bl.ID, n)
+			ids[i] = output.EscapeInline(domain.DisplayID(bl.Namespace, bl.ID, n))
 		}
 		return []string{
 			"  - When resolved: " + output.Escape(check),
@@ -716,7 +716,7 @@ func gateAutoOpenAux(resolver *domain.AliasResolver, n domain.ShortIDs, progress
 			if err != nil {
 				return nil, err
 			}
-			line := fmt.Sprintf("  - Waiting for: %s %s", id, b.Status)
+			line := fmt.Sprintf("  - Waiting for: %s %s", output.EscapeInline(id), b.Status)
 			if len(b.Children) > 0 {
 				done := 0
 				var remaining []string
@@ -729,7 +729,7 @@ func gateAutoOpenAux(resolver *domain.AliasResolver, n domain.ShortIDs, progress
 					if err != nil {
 						return nil, err
 					}
-					remaining = append(remaining, cid+" "+c.Status)
+					remaining = append(remaining, output.EscapeInline(cid)+" "+c.Status)
 				}
 				suffix := fmt.Sprintf("（子 %d/%d 終端", done, len(b.Children))
 				if len(remaining) > 0 {
@@ -772,7 +772,7 @@ func blockingDisplayIDs(resolver *domain.AliasResolver, blocking []domain.Blocke
 		if err != nil {
 			return nil, err
 		}
-		ids[i] = id
+		ids[i] = output.EscapeInline(id)
 	}
 	return ids, nil
 }

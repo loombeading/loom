@@ -1,6 +1,8 @@
 // Copyright 2026 Takanao Endo
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build lmtestclock
+
 package domain
 
 import (
@@ -57,6 +59,12 @@ func TestNow(t *testing.T) {
 		}
 		if !errors.As(err, new(*ValidationError)) {
 			t.Errorf("Now() error type = %T, want *ValidationError", err)
+		}
+	})
+
+	t.Run("test builds do not warn about LM_NOW", func(t *testing.T) {
+		if got := ClockWarning(envFunc(map[string]string{"LM_NOW": "2026-01-02T03:04:05Z"})); got != "" {
+			t.Errorf("ClockWarning() = %q, want empty", got)
 		}
 	})
 }

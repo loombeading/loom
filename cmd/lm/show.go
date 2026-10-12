@@ -579,5 +579,5 @@ func waitingLine(ctx context.Context, q domain.Querier, id string, n domain.Shor
 			return "", err
 		}
 	}
-	return fmt.Sprintf(output.WaitingLineFormat, strings.Join(displays, ", ")), nil
+	return fmt.Sprintf(output.WaitingLineFormat, output.EscapeInline(strings.Join(displays, ", "))), nil
 }

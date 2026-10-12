@@ -221,6 +221,8 @@ func TestCreateBeadRejectsInvalidInput(t *testing.T) {
 		"bad depth":     func(in *CreateInput) { in.Depth = MaxReasoningDepth + 1 },
 		"no milestone":  func(in *CreateInput) { in.RequireMilestone = true },
 		"release label": func(in *CreateInput) { in.Labels = []string{"release:v1"} },
+		"label newline": func(in *CreateInput) { in.Labels = []string{"a\nb"} },
+		"ref bidi":      func(in *CreateInput) { in.ExternalRefs = []string{"x\u202Ey"} },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

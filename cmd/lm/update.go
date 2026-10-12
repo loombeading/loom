@@ -316,12 +316,12 @@ func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, ra
 		newNamespace = in.Namespace
 	}
 	if newNamespace != namespace {
-		fmt.Fprintf(stdout, "- Updated: %s (was %s)\n", domain.DisplayID(newNamespace, id, n), domain.DisplayID(namespace, id, n))
+		fmt.Fprintf(stdout, "- Updated: %s (was %s)\n", output.EscapeInline(domain.DisplayID(newNamespace, id, n)), output.EscapeInline(domain.DisplayID(namespace, id, n)))
 	} else {
-		fmt.Fprintf(stdout, "- Updated: %s\n", domain.DisplayID(newNamespace, id, n))
+		fmt.Fprintf(stdout, "- Updated: %s\n", output.EscapeInline(domain.DisplayID(newNamespace, id, n)))
 	}
 	for _, w := range warnings {
-		fmt.Fprintf(stderr, "warning: %s: %s\n", domain.DisplayID(newNamespace, id, n), w)
+		fmt.Fprintf(stderr, "warning: %s: %s\n", output.EscapeInline(domain.DisplayID(newNamespace, id, n)), output.EscapeInline(w))
 	}
 	if partialID != "" {
 		partialNamespace, nerr := namespaceOf(ctx, db.SQL, partialID)
@@ -329,7 +329,7 @@ func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, ra
 			output.WriteError(stderr, nerr.Error())
 			return nil, 1, true
 		}
-		fmt.Fprintf(stdout, "- Created: %s\n", domain.DisplayID(partialNamespace, partialID, n))
+		fmt.Fprintf(stdout, "- Created: %s\n", output.EscapeInline(domain.DisplayID(partialNamespace, partialID, n)))
 	}
 	return newly, 0, false
 }

@@ -184,7 +184,7 @@ func openMigrateDB(dir string, opts OpenOptions) (*sql.DB, error) {
 		return nil, fmt.Errorf("stat %s: %w", dbPath, err)
 	}
 
-	if IsReadOnlyEnv(opts.Env("LM_READONLY")) {
+	if !dbWritable(dir, dbPath) {
 		return nil, ErrReadOnlyWrite
 	}
 

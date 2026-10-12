@@ -141,9 +141,9 @@ func closeAndReport(ctx context.Context, db *storage.DB, req closeRequest, raw s
 		}
 		return 1, false
 	}
-	fmt.Fprintf(stdout, "- Closed: %s\n", domain.DisplayID(res.namespace, id, n))
+	fmt.Fprintf(stdout, "- Closed: %s\n", output.EscapeInline(domain.DisplayID(res.namespace, id, n)))
 	for _, g := range res.autoResolvedGates {
-		fmt.Fprintf(stdout, "- Auto-resolved: %s\n", domain.DisplayID(g.Namespace, g.ID, n))
+		fmt.Fprintf(stdout, "- Auto-resolved: %s\n", output.EscapeInline(domain.DisplayID(g.Namespace, g.ID, n)))
 	}
 	derivedOpen, err := derivedOpenDisplayIDs(ctx, db.SQL, id, n)
 	if err != nil {
@@ -151,7 +151,7 @@ func closeAndReport(ctx context.Context, db *storage.DB, req closeRequest, raw s
 		return 1, true
 	}
 	if len(derivedOpen) > 0 {
-		fmt.Fprintf(stdout, "- Derived (open): %s\n", strings.Join(derivedOpen, ", "))
+		fmt.Fprintf(stdout, "- Derived (open): %s\n", output.EscapeInline(strings.Join(derivedOpen, ", ")))
 	}
 	for _, nid := range res.newly {
 		newlyReadyIDs[nid] = true

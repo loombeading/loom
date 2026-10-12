@@ -70,6 +70,7 @@ func main() {
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	var outBuf, errBuf bytes.Buffer
+	errBuf.WriteString(domain.ClockWarning(os.Getenv))
 	code := dispatch(args, stdin, &outBuf, &errBuf)
 
 	decorate := !isHelpOrCompletion(args) && output.ColorEnabled(stdout, os.Getenv)
@@ -223,9 +224,13 @@ func resolveDirAndConfig(env storage.Env) (string, *config.Config, error) {
 }
 
 func openDBAt(dir string, env storage.Env, actorFlag string, cfg *config.Config) (*storage.DB, error) {
+	actorVal := actor(actorFlag, env)
+	if err := domain.ValidateIdentValues("actor", actorVal); err != nil {
+		return nil, err
+	}
 	return storage.Open(context.Background(), dir, storage.OpenOptions{
 		Env:           env,
-		Actor:         actor(actorFlag, env),
+		Actor:         actorVal,
 		BusyTimeoutMS: cfg.BusyTimeoutMSOr(storage.DefaultBusyTimeoutMS),
 	})
 }

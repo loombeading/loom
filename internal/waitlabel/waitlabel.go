@@ -37,6 +37,7 @@ const (
 	PublicCheck   Kind = "public-check"
 	SchemaVersion Kind = "schema-version"
 	URL           Kind = "url"
+	HarnessCheck  Kind = "harness-check"
 
 	RunnersOnline Kind = "runners-online"
 )
@@ -49,7 +50,7 @@ var probeKinds = map[Kind]bool{
 	Tier: false, PRMerged: true, RepoVisibility: true,
 	RepoAbsent: true, GitHub: false,
 	Tag: false, SLI: false, PublicPath: false, PublicReview: false, PublicCheck: false,
-	SchemaVersion: false, URL: false,
+	SchemaVersion: false, URL: false, HarnessCheck: false,
 }
 
 var Kinds = slices.Sorted(maps.Keys(probeKinds))

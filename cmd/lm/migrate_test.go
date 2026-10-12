@@ -58,7 +58,7 @@ func TestMigrateCLIRejectsPreReleaseDatabase(t *testing.T) {
 
 func TestMigrateCLIReadOnlyExitsNonZero(t *testing.T) {
 	makePreReleaseBeadsDir(t)
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 
 	out, errS, code := runCmd(t, []string{"migrate"}, "")
 	if code != 1 {

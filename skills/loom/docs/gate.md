@@ -13,7 +13,7 @@
   [--reason "..."] --kind human|external|adjudicate|confirm`で単独の Gate を作れる（1 つ以上の `--blocks` が必須。`--subject` も必須。`--kind` は必須で既定は無い。付けなければ exit 1。`--kind external` は `--resolver` も必須で、無ければ exit 1。`--reason` は任意）。`--current`/`--proposal`/`--check`/`--resolver`/`--reason` は省略でき、Loom は中身を解釈しない自由記述である。 Gate の型は `--kind` で選ぶ: `human` はラベル `kind:human`、`external` はラベル `kind:external`、`adjudicate` はラベル `kind:adjudicate`、`confirm` はラベル`kind:confirm` が付く（`human`・`confirm` は `lm gate` の「Needs you」節に、`adjudicate` は判定者（選択や可否を決めるエージェント）の結論を待つ「Waiting on judge」節に入る。`adjudicate` は判定者の結論で開き、人の手を要しない）。型の判定はラベルのみで決まる（`--subject` 等の文面は見ない）。ラベルの無い Gate（インポート等で持ち込まれたもの）は「Unknown kind (fix labels)」節に入る。
 - **Gate の Title は `--subject` から自動生成される**: `gate: <件名の先頭 60 rune>`（60 rune を超える場合は末尾を `…` に置き換える）。`--current`/`--proposal`/`--check`/`--resolver` を含む全文は切り詰められず `description` に残るため、`lm gate` や`lm show <id>` で確認できる——Title は `lm list` の列挙表示のためだけ短くしている。
 - **Gate を解除する方法は 1 つだけ**: `lm gate resolve <id> --reason "..."`（`--reason` は必須）。`lm close` や `lm update --status` では解除できない。例外: 待ち条件がもう満たされた Gate は `lm close` と `lm gate sweep` が自動で resolve する（下の節）。
-- **誰でも解除できる**（claim/release のような担当者制限は無い）。Gate には「復旧経路の無いまま誰の `lm ready` にも二度と現れない」という事故を防ぐ意図があるため、担当者を絞らない設計になっている。
+- **誰でも解除できる**（claim/release のような担当者制限は無い）。Gate には「復旧経路の無いまま誰の `lm ready` にも二度と現れない」という事故を防ぐ意図があるため、担当者を絞らない設計になっている。これは `lm` の機構の事実で、運用の既定では人向け Gate（`kind:human`・`kind:confirm`）は利用者の明示の指示があったときだけエージェントが resolve する（下の「Gate の整理」）。
 - **時間経過では開かない**。`LM_NOW` を進めても Gate は自動で解除されない（docs/memory.md の Compaction とは無関係の別機構）。誰かが明示的に`lm gate resolve` を呼ばない限り、待ち続ける。例外: 待ち条件がもう満たされた Gate は、時間経過ではなく `lm close`・`lm gate sweep` の実行が引き金になって resolve される（下の節）。
 - **external 型の Gate は watcher が resolve を呼ぶ**ことを想定する。watcher は Loom の外で条件を監視し、満たされたら `lm gate resolve` を呼ぶプロセスで、実行者が用意する（Loom 本体は提供しない）。CI の完了・外部システムのコールバックなど、Loom の外で条件が満たされたことを検知した側（人間ではなく監視プロセス）が`lm gate resolve --reason "<検知した条件>"` を実行する運用にする。
 - `lm gate` は**未解除（open）の Gate のみ**を、種別ごとの節へ分けて一覧する: `## Needs you`（human・confirm）→ `## Blocked by other work`（human・confirm のうち、Gate 自身に未完了のブロッカーがあるもの、または終端でない塞ぎ先のどれにも他の未完了のブロッカーが残るもの。終端の塞ぎ先は判定に使わない）→ `## Waiting on judge`（adjudicate。実行者が判定者に回す）→ `## Opens automatically`（external）→ `## Unknown kind (fix labels)`（ラベルの無い Gate）。空の節は出さない。`lm ahead` の `## Gate waiting` も同じ分類を使い、Gate ごとの行は `### Needs you` にだけ出し、他の分類は分類ごとに件数の 1 行に畳む。Blocked by other work の Gate は ahead の `### Needs you` にも出ない。各行の直後に2空白インデントの補助行が付く: human・confirm・adjudicate は「When resolved: ...」と「Run: lm gate resolve ...」、 external は塞いでいる各 Bead の「Waiting for: <id> <status>」（子 Bead がいれば終端数の内訳つき）、Unknown kind (fix labels) は「Fix: lm update <id> --add-label kind:adjudicate|kind:external」。
@@ -116,11 +116,11 @@ Gate が開かないまま残っていて、待ち対象を作る Bead が見当
 
 ### Gate の整理（`lm gate` を見たとき）
 
-`lm gate` の一覧を見た対話セッションは、**推奨を並べて利用者の指示を待たない**。人向け Gate を一覧して「resolve してよいか」と聞き返すと、Gate を作った側が次の誰かへ渡したのと同じ構造になり、待ちが一段増えるだけで誰も解除しない。Gate を次の 3 つに分け、分類ごとに対話セッションが自分で処理する。
+`lm gate` の一覧を見た対話セッションは、Gate を次の 3 つに分け、分類ごとに処理を決める。人向け Gate（`kind:human`・`kind:confirm`）を開くかは、既定では利用者が決める。対話セッションは分類と推奨案を Gate ごとに 1 行で示し、利用者が開くと指示した Gate だけを `lm gate resolve` する。実行者の文書が「人向け Gate の resolve の担い手」を上書きしていれば、それに従う（例: 分類 2 を対話セッションが判定して resolve する）。
 
-1. **待ち条件がもう満たされている**（PR が受入済み・agent の作業が終わっている）。実物（PR・worktree・引き継ぎ簿・`lm show` の履歴）で確かめ、確かめた事実を `--reason` に書いて `lm gate resolve` する。
-2. **判断材料が Bead に揃っている**（`kind:human`・`kind:confirm` で、`--current`/`--proposal`/`--check` に現状・提案・チェックすると何が始まるかがあり、推奨案があり、分類 3 に当たらない）。対話セッションが判定して `lm gate resolve` する。採らないなら判定者（`adjudicate`）に振る。判定者は結論と理由を `lm update --reason` で記録するだけで、`lm gate reject` はその結論に沿って判定者を起動した側（対話セッション・実行者の判定起動）が実行する。実装を受け持つ実行者の起動（設計・再開・受入）は reject せず、`kind:adjudicate` の Gate で塞いで終わる。
-3. **利用者にしか出来ない操作を待っている**（公開・外部への送信・force push・main への直接 push・ブランチ削除など、取り消せない操作や利用者の権限が要る操作）。`accepted` の付与は実行者の受入が行うので、ここに入らない。1 と 2 を全て片付けてから、利用者へは「何をすれば次に何が始まるか」を操作ごとに 1 行で列挙する。それ以外を混ぜない。
+1. **待ち条件がもう満たされている**（PR が受入済み・agent の作業が終わっている）。実物（PR・worktree・引き継ぎ簿・`lm show` の履歴）で確かめ、確かめた事実を `--reason` に書く。`kind:external`・`kind:adjudicate` の Gate はそのまま `lm gate resolve` する。人向け Gate は確かめた事実を添えて利用者に示し、指示を受けてから resolve する。
+2. **判断材料が Bead に揃っている**（`kind:human`・`kind:confirm` で、`--current`/`--proposal`/`--check` に現状・提案・チェックすると何が始まるかがあり、推奨案があり、分類 3 に当たらない）。対話セッションは推奨案と理由を利用者に示し、利用者の指示に沿って `lm gate resolve` か `lm gate reject` をする。上書きで判定者（`adjudicate`）に振る運用では、判定者は結論と理由を `lm update --reason` で記録するだけで、`lm gate reject` はその結論に沿って判定者を起動した側（対話セッション・実行者の判定起動）が実行する。実装を受け持つ実行者の起動（設計・再開・受入）は reject せず、`kind:adjudicate` の Gate で塞いで終わる。
+3. **利用者にしか出来ない操作を待っている**（公開・外部への送信・force push・main への直接 push・ブランチ削除など、取り消せない操作や利用者の権限が要る操作）。受入（`accepted` の付与を含む）は、既定では利用者が行うのでここに入る。実行者の文書が受入の担い手を上書きしていれば、ここに入らない。利用者へは「何をすれば次に何が始まるか」を操作ごとに 1 行で列挙する。
 
 処理のたびに、放置の原因（作成側と条件を満たした側が別セッションだった・判定が誤っていた・通知経路が無かった）を Bead に起票する。解除だけして原因を残さないと同じ Gate が再び溜まる。Gate の本文が現状と食い違っていれば `lm update <gate-id> --reason` で経過を記録する。
 
@@ -132,7 +132,7 @@ Gate が開かないまま残っていて、待ち対象を作る Bead が見当
 
 1. **resolve** — 判定が go で、開けば塞がれた Bead がそのまま進められる。判定の結論を `--reason` に書いて `lm gate resolve` する。
 2. **直し Bead の起票・観測待ちへの付け替え** — 判定が「このままでは開けない」で、エージェントが直せる。直す Bead を起票して Gate の前提に `lm dep add` で張り、Gate は open のまま残す。測れば開ける待ちなら、`wait:` ラベル（「測って開ける待ちは wait: ラベルで表す」）を付けて実行者に測らせる。
-3. **人への格上げ** — 開くのに人にしか出来ない取り消せない操作（公開・外部への送信・force push・main への直接 push）が要る。それ以外の判断（変更を受け入れるか・出荷してよいかを含む）は判定者の結論で 1 か 2 に進め、人へ回さない。判定の結論と人に求める操作を `--reason` に書いて判定 Gate を `lm gate resolve` し、`lm gate create --kind human --adjudicated-by <判定 Gate> --blocks <塞いでいた Bead>` で人の Gate を新しく作る（判定 Gate のラベルを `kind:human` へ付け替えると lm が拒否する）。`wait:` ラベルは新しい Gate へ引き継ぐ。以後は「Needs you」に出る。
+3. **人への格上げ** — 開くのに人にしか出来ない取り消せない操作（公開・外部への送信・force push・main への直接 push）が要るか、変更を受け入れるか・出荷してよいか・方針の判断が要る。受入・出荷・方針の判断は、既定では利用者が行うので人へ上げる。実行者の文書が「判定者に委ねる判断の範囲」を上書きしていれば、その範囲の判断は判定者の結論で 1 か 2 に進める。判定の結論と人に求める操作を `--reason` に書いて判定 Gate を `lm gate resolve` し、`lm gate create --kind human --adjudicated-by <判定 Gate> --blocks <塞いでいた Bead>` で人の Gate を新しく作る（判定 Gate のラベルを `kind:human` へ付け替えると lm が拒否する）。`wait:` ラベルは新しい Gate へ引き継ぐ。以後は「Needs you」に出る。
 
 無人の実行者が Waiting on judge を自分で回すときも、判定者に渡すもの（件名・現状・提案・塞いでいる Bead）と、結論に沿って行う 1〜3 は上と同じである。判定者をいつ起動するか（実行ごと・件数が溜まったとき等）と、判定者に使うエージェントは利用者が自分で定める。
 

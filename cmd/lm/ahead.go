@@ -464,7 +464,7 @@ func (v *aheadView) releasesSection(now time.Time, releases []domain.Bead, rows 
 	etaLines, etas, hasHumanGate, judge := v.releaseETAs(now, entries, g, gateIDsByBead, gateKindByID, gateLabelsByID)
 	sec = append(sec, etaLines...)
 	for i, e := range entries {
-		line := fmt.Sprintf("%s  milestone=%s  %s", output.BeadLine(e.row), strings.Join(releaseNames(e.bead.Labels), ","), e.stats.String())
+		line := fmt.Sprintf("%s  milestone=%s  %s", output.BeadLine(e.row), output.EscapeInline(strings.Join(releaseNames(e.bead.Labels), ",")), e.stats.String())
 		abolished := hasAbolishedLabel(e.bead.Labels)
 		if !etas[i].Skip && !abolished {
 			line += "  " + formatReleaseDays(etas[i])
@@ -487,7 +487,7 @@ func (v *aheadView) releasesSection(now time.Time, releases []domain.Bead, rows 
 	for _, id := range entries[0].stats.readyIDs {
 		frontReadyIDs[id] = true
 	}
-	frontReleaseNames := strings.Join(releaseNames(entries[0].bead.Labels), ",")
+	frontReleaseNames := output.EscapeInline(strings.Join(releaseNames(entries[0].bead.Labels), ","))
 	return sec, func(id string) string {
 		if frontReadyIDs[id] {
 			return "  milestone=" + frontReleaseNames
@@ -915,7 +915,7 @@ func stalledGateIDs(gates []domain.GateListEntry, now time.Time, n domain.ShortI
 		if !dateOnly || len(dates) == 0 || !datesPassed(dates, any, now) {
 			continue
 		}
-		ids = append(ids, domain.DisplayID(e.Namespace, e.ID, n))
+		ids = append(ids, output.EscapeInline(domain.DisplayID(e.Namespace, e.ID, n)))
 	}
 	return ids
 }

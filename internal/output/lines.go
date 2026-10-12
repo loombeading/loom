@@ -49,7 +49,7 @@ func WriteFilter(w io.Writer, conds []Cond) {
 	}
 	parts := make([]string, len(conds))
 	for i, c := range conds {
-		parts[i] = fmt.Sprintf(`%s="%s"`, c.Key, escapeInline(c.Value))
+		parts[i] = fmt.Sprintf(`%s="%s"`, c.Key, EscapeInline(c.Value))
 	}
 	fmt.Fprintf(w, FilterLineFormat+"\n", strings.Join(parts, ", "))
 }
@@ -82,15 +82,15 @@ func WriteCancelled(w io.Writer, rows []BeadRow) {
 }
 
 func WriteRejected(w io.Writer, id, reason string) {
-	fmt.Fprintf(w, RejectedLineFormat+"\n", escapeInline(id), escapeInline(reason))
+	fmt.Fprintf(w, RejectedLineFormat+"\n", EscapeInline(id), EscapeInline(reason))
 }
 
 func WriteClaimed(w io.Writer, id string) {
-	fmt.Fprintf(w, ClaimedLineFormat+"\n", escapeInline(id))
+	fmt.Fprintf(w, ClaimedLineFormat+"\n", EscapeInline(id))
 }
 
 func WriteError(w io.Writer, msg string) {
-	fmt.Fprintf(w, ErrorLineFormat+"\n", escapeInline(msg))
+	fmt.Fprintf(w, ErrorLineFormat+"\n", EscapeInline(msg))
 }
 
 func WritePickup(w io.Writer, line string) {

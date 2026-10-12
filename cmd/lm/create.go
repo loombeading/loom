@@ -197,7 +197,7 @@ func runCreate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if seenID != "" {
-		_, _ = fmt.Fprintf(stdout, "- Redetected: %s\n", displayID)
+		_, _ = fmt.Fprintf(stdout, "- Redetected: %s\n", output.EscapeInline(displayID))
 		return 0
 	}
 	output.WriteCreated(stdout, output.BeadRow{

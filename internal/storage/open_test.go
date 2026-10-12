@@ -160,63 +160,28 @@ func TestOpenPreReleaseSchemaIsRejected(t *testing.T) {
 		t.Fatalf("err = %v, want ErrSchemaTooNew", err)
 	}
 
-	_, err = Open(context.Background(), dir, OpenOptions{Env: envMap(map[string]string{"LM_READONLY": "1"})})
+	requireNonRoot(t)
+	if err := os.Chmod(DBPath(dir), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(DBPath(dir), 0o644) })
+	_, err = Open(context.Background(), dir, OpenOptions{Env: envMap(nil)})
 	if !errors.Is(err, ErrSchemaTooNew) {
 		t.Fatalf("read-only err = %v, want ErrSchemaTooNew", err)
 	}
 }
 
-func TestIsReadOnlyEnv(t *testing.T) {
-	cases := []struct {
-		v    string
-		want bool
-	}{
-		{"", false},
-		{"0", false},
-		{"false", false},
-		{"False", false},
-		{"FALSE", false},
-		{"no", false},
-		{"No", false},
-		{"1", true},
-		{"true", true},
-		{"True", true},
-		{"yes", true},
-		{"readonly", true},
-		{"2", true},
-	}
-	for _, c := range cases {
-		if got := IsReadOnlyEnv(c.v); got != c.want {
-			t.Errorf("IsReadOnlyEnv(%q) = %v, want %v", c.v, got, c.want)
-		}
-	}
-}
-
-func TestOpenReadOnlyModeTruthyValue(t *testing.T) {
-	dir := mustMkdirBeads(t)
-	db := openWritable(t, dir)
-	_ = db.Close()
-
-	roDB, err := Open(context.Background(), dir, OpenOptions{Env: envMap(map[string]string{"LM_READONLY": "true"})})
-	if err != nil {
-		t.Fatalf("Open read-only: %v", err)
-	}
-	defer func() { _ = roDB.Close() }()
-
-	if !roDB.ReadOnly {
-		t.Fatal("ReadOnly = false, want true (LM_READONLY=true)")
-	}
-	if err := roDB.WithWrite(context.Background(), func(tx *sql.Tx) error { return nil }); !errors.Is(err, ErrReadOnlyWrite) {
-		t.Fatalf("WithWrite on read-only DB (LM_READONLY=true): err = %v, want ErrReadOnlyWrite", err)
-	}
-}
-
 func TestOpenReadOnlyModeRO(t *testing.T) {
+	requireNonRoot(t)
 	dir := mustMkdirBeads(t)
 	db := openWritable(t, dir)
 	_ = db.Close()
+	if err := os.Chmod(DBPath(dir), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(DBPath(dir), 0o644) })
 
-	roDB, err := Open(context.Background(), dir, OpenOptions{Env: envMap(map[string]string{"LM_READONLY": "1"})})
+	roDB, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil)})
 	if err != nil {
 		t.Fatalf("Open read-only: %v", err)
 	}
@@ -252,7 +217,7 @@ func TestOpenReadOnlyImmutableWhenShmMissingAndDirNotWritable(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	roDB, err := Open(context.Background(), dir, OpenOptions{Env: envMap(map[string]string{"LM_READONLY": "1"})})
+	roDB, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil)})
 	if err != nil {
 		t.Fatalf("Open read-only: %v", err)
 	}
@@ -260,6 +225,54 @@ func TestOpenReadOnlyImmutableWhenShmMissingAndDirNotWritable(t *testing.T) {
 
 	if roDB.Mode != ModeImmutable {
 		t.Fatalf("Mode = %q, want %q", roDB.Mode, ModeImmutable)
+	}
+}
+
+func TestOpenFallsBackToReadOnlyWhenDBNotWritable(t *testing.T) {
+	requireNonRoot(t)
+	cases := []struct {
+		name     string
+		lock     func(dir string) error
+		wantMode string
+	}{
+		{"file", func(dir string) error { return os.Chmod(DBPath(dir), 0o444) }, ModeReadOnly},
+		{"dir", func(dir string) error { return os.Chmod(dir, 0o555) }, ModeImmutable},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := mustMkdirBeads(t)
+			db := openWritable(t, dir)
+			_ = db.Close()
+			_ = os.Remove(DBPath(dir) + "-shm")
+			_ = os.Remove(DBPath(dir) + "-wal")
+
+			if err := c.lock(dir); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = os.Chmod(dir, 0o755)
+				_ = os.Chmod(DBPath(dir), 0o644)
+			})
+
+			roDB, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil)})
+			if err != nil {
+				t.Fatalf("Open on non-writable DB: %v", err)
+			}
+			defer func() { _ = roDB.Close() }()
+
+			if !roDB.ReadOnly {
+				t.Fatal("ReadOnly = false, want true")
+			}
+			if roDB.Mode != c.wantMode {
+				t.Fatalf("Mode = %q, want %q", roDB.Mode, c.wantMode)
+			}
+			if _, err := UserVersion(context.Background(), roDB); err != nil {
+				t.Fatalf("UserVersion: %v", err)
+			}
+			if err := roDB.WithWrite(context.Background(), func(tx *sql.Tx) error { return nil }); !errors.Is(err, ErrReadOnlyWrite) {
+				t.Fatalf("WithWrite: err = %v, want ErrReadOnlyWrite", err)
+			}
+		})
 	}
 }
 
@@ -276,9 +289,14 @@ func TestOpenExistingDBSucceedsWithoutAllowCreate(t *testing.T) {
 }
 
 func TestOpenReadOnlyMissingDBReturnsErrDBNotFound(t *testing.T) {
+	requireNonRoot(t)
 	dir := mustMkdirBeads(t)
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	_, err := Open(context.Background(), dir, OpenOptions{Env: envMap(map[string]string{"LM_READONLY": "1"})})
+	_, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil)})
 	if !errors.Is(err, ErrDBNotFound) {
 		t.Fatalf("err = %v, want ErrDBNotFound", err)
 	}

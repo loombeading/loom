@@ -134,7 +134,7 @@ func FuzzEscapeInline(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		out := escapeInline(s)
+		out := EscapeInline(s)
 		noInvisible(t, out)
 		if strings.ContainsAny(out, "\n\r") {
 			t.Fatalf("escapeInline(%q) = %q contains a newline or CR", s, out)

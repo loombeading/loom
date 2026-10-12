@@ -179,7 +179,10 @@ func validateCreateInput(in CreateInput) error {
 	if err := rejectReleaseLabel(in.Labels); err != nil {
 		return err
 	}
-	return nil
+	if err := ValidateIdentValues("label", in.Labels...); err != nil {
+		return err
+	}
+	return ValidateIdentValues("external_ref", in.ExternalRefs...)
 }
 
 func checkCreateAffiliated(ctx context.Context, tx *sql.Tx, in CreateInput, parentID, discoveredFromID string) error {

@@ -4,6 +4,7 @@
 package main
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -130,12 +131,19 @@ func TestEnumFilterErrorPaths(t *testing.T) {
 		t.Errorf("gate --namespace Bad: exit code = %d, stderr = %q, want 1 naming the namespace", code, errS)
 	}
 
-	t.Setenv("LM_READONLY", "1")
-	out, errS, code := runCmd(t, []string{"gate", "resolve", ga, "--reason", "go"}, "")
-	if code != 1 || strings.Contains(out, "- Resolved: ") {
-		t.Errorf("gate resolve under LM_READONLY: exit code = %d, stdout = %q, stderr = %q, want 1 and nothing resolved", code, out, errS)
+	if os.Geteuid() != 0 {
+		p := beadsDBPath(t)
+		if err := os.Chmod(p, 0o444); err != nil {
+			t.Fatal(err)
+		}
+		out, errS, code := runCmd(t, []string{"gate", "resolve", ga, "--reason", "go"}, "")
+		if code != 1 || strings.Contains(out, "- Resolved: ") {
+			t.Errorf("gate resolve on a read-only DB: exit code = %d, stdout = %q, stderr = %q, want 1 and nothing resolved", code, out, errS)
+		}
+		if err := os.Chmod(p, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
-	t.Setenv("LM_READONLY", "")
 
 	t.Setenv("LM_NAMESPACE", "Bad")
 	if _, errS, code := runCmd(t, []string{"gate", "resolve", ga, "--reason", "go"}, ""); code != 1 || !strings.Contains(errS, "namespace") {

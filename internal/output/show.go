@@ -54,7 +54,7 @@ func linkLine(r DepRow) string {
 		arrow = "→"
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "- %s %s %s", Escape(r.Type), arrow, r.Display)
+	fmt.Fprintf(&sb, "- %s %s %s", Escape(r.Type), arrow, EscapeInline(r.Display))
 	if r.Dangling {
 		sb.WriteString(" (dangling)")
 		return sb.String()
@@ -74,9 +74,9 @@ func WriteDerived(w io.Writer, rows []DepRow) {
 
 func derivedLine(r DepRow) string {
 	if r.Dangling {
-		return fmt.Sprintf("- %s (dangling)", r.Display)
+		return fmt.Sprintf("- %s (dangling)", EscapeInline(r.Display))
 	}
-	return fmt.Sprintf("- %s %s %s", r.Display, statusPriorityTypeBracket(r.Status, r.Priority, r.BeadType, r.ExternalRefs), Escape(r.Title))
+	return fmt.Sprintf("- %s %s %s", EscapeInline(r.Display), statusPriorityTypeBracket(r.Status, r.Priority, r.BeadType, r.ExternalRefs), Escape(r.Title))
 }
 
 type ChildStatusCount struct {
@@ -90,7 +90,7 @@ func ChildrenLine(counts []ChildStatusCount) string {
 		if c.Count == 0 {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("%s %d", c.Status, c.Count))
+		parts = append(parts, fmt.Sprintf("%s %d", EscapeInline(c.Status), c.Count))
 	}
 	return strings.Join(parts, ", ")
 }
@@ -129,10 +129,10 @@ func WriteHistory(w io.Writer, rows []HistoryRow) {
 
 func historyLine(r HistoryRow) string {
 	if r.Created != "" {
-		return fmt.Sprintf("- %s %s created (%s)", r.Time, Escape(r.Actor), Escape(r.Created))
+		return fmt.Sprintf("- %s %s created (%s)", EscapeInline(r.Time), Escape(r.Actor), Escape(r.Created))
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "- %s %s %s", r.Time, Escape(r.Actor), Escape(r.Kind))
+	fmt.Fprintf(&sb, "- %s %s %s", EscapeInline(r.Time), Escape(r.Actor), Escape(r.Kind))
 	if r.HasField {
 		fmt.Fprintf(&sb, " %s", Escape(r.Field))
 	}

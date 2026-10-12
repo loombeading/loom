@@ -37,13 +37,3 @@ func TestInitRejectsExistingDatabase(t *testing.T) {
 		t.Fatalf("err = %v, want ErrAlreadyInitialized", err)
 	}
 }
-
-func TestInitRejectedUnderReadOnly(t *testing.T) {
-	cwd := t.TempDir()
-	dir := filepath.Join(cwd, BeadsDirName)
-
-	_, err := Init(context.Background(), dir, OpenOptions{Env: envMap(map[string]string{"LM_READONLY": "1"})})
-	if !errors.Is(err, ErrReadOnlyWrite) {
-		t.Fatalf("err = %v, want ErrReadOnlyWrite", err)
-	}
-}

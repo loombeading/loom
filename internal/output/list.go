@@ -27,8 +27,9 @@ func WriteBeadList(w io.Writer, rows []BeadRow) {
 
 func statusPriorityTypeBracket(status string, priority int, typ string, refs []string) string {
 	parts := make([]string, 0, 4)
+	status = EscapeInline(status)
 	if typ != "" && typ != defaultBeadType {
-		parts = append(parts, typ)
+		parts = append(parts, EscapeInline(typ))
 	}
 	n := prNumber(refs)
 	switch {
@@ -51,22 +52,25 @@ func BeadLine(r BeadRow) string {
 	return beadLine(r)
 }
 
-func beadLine(r BeadRow) string {
-	id := r.ID
+func displayID(r BeadRow) string {
 	if r.Alias != "" {
-		id = r.Alias
+		return EscapeInline(r.Alias)
 	}
+	return EscapeInline(r.ID)
+}
+
+func beadLine(r BeadRow) string {
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("  ", r.Depth))
-	fmt.Fprintf(&sb, "- %s %s %s", id, statusPriorityTypeBracket(r.Status, r.Priority, r.Type, r.ExternalRefs), Escape(r.Title))
+	fmt.Fprintf(&sb, "- %s %s %s", displayID(r), statusPriorityTypeBracket(r.Status, r.Priority, r.Type, r.ExternalRefs), Escape(r.Title))
 	if r.ClaimedBy != "" {
-		fmt.Fprintf(&sb, "  @%s", r.ClaimedBy)
+		fmt.Fprintf(&sb, "  @%s", EscapeInline(r.ClaimedBy))
 	}
 	if len(r.BlockedBy) > 0 {
-		fmt.Fprintf(&sb, "  ← blocked by: %s", strings.Join(r.BlockedBy, ", "))
+		fmt.Fprintf(&sb, "  ← blocked by: %s", EscapeInline(strings.Join(r.BlockedBy, ", ")))
 	}
 	if r.EffSource != "" {
-		fmt.Fprintf(&sb, "  eff=P%d(%s)", r.EffPriority, r.EffSource)
+		fmt.Fprintf(&sb, "  eff=P%d(%s)", r.EffPriority, EscapeInline(r.EffSource))
 	}
 	if r.ExpediteExpired {
 		sb.WriteString(" expedite-expired")
@@ -75,11 +79,7 @@ func beadLine(r BeadRow) string {
 }
 
 func WriteCreated(w io.Writer, r BeadRow) {
-	id := r.ID
-	if r.Alias != "" {
-		id = r.Alias
-	}
-	fmt.Fprintf(w, "- Created: %s %s %s\n", id, statusPriorityTypeBracket(r.Status, r.Priority, r.Type, r.ExternalRefs), Escape(r.Title))
+	fmt.Fprintf(w, "- Created: %s %s %s\n", displayID(r), statusPriorityTypeBracket(r.Status, r.Priority, r.Type, r.ExternalRefs), Escape(r.Title))
 }
 
 func prNumber(refs []string) string {

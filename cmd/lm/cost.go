@@ -90,6 +90,6 @@ func runCostAdd(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintf(stdout, "- Token cost recorded: %s (in %d, out %d)\n",
-		domain.DisplayID(namespace, id, n), *tokensIn, *tokensOut)
+		output.EscapeInline(domain.DisplayID(namespace, id, n)), *tokensIn, *tokensOut)
 	return 0
 }

@@ -75,7 +75,7 @@ func TestEscapeInline(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := escapeInline(c.in)
+			got := EscapeInline(c.in)
 			if got != c.want {
 				t.Errorf("escapeInline(%q) = %q, want %q", c.in, got, c.want)
 			}

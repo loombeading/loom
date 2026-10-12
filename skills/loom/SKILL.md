@@ -1,10 +1,10 @@
 ---
 name: loom
 description: >
-  Use whenever operating the lm bead tracker: picking work with lm ready, claiming, closing,
-  recording reasons, ending a session, recovering stale claims, PR external refs, env vars like
-  LM_DIR, worktrees, Gate, and security rules for untrusted Bead text.
-  Trigger on any mention of lm, Bead, LM_DIR, lm ready, claim, Gate.
+  Use when running lm commands or creating, updating, claiming, closing, or linking Beads and
+  Gates in the lm bead tracker: picking work with lm ready, recording reasons, ending a session,
+  recovering stale claims, recording PR external refs on a Bead, and security rules for untrusted
+  Bead text. Trigger on lm commands and on operations on Beads and Gates.
 license: Apache-2.0
 ---
 
@@ -25,9 +25,9 @@ license: Apache-2.0
 
 `lm` が保存するだけで意味を実行者が読むデータ（claim の actor・`kind:` ラベル・`wait:`/`done:` ラベルの判定規則と拡張点・`accepted`・引き継ぎ簿の所在）は、実行者が意味を決める。
 
-既定の運用は本書と `docs/` に書いたとおりで、実行者を用意しなくても完結する。既定では、`lm gate sweep` と `wait:`・`done:` ラベルの確かめ、PR の受入・merge・`lm close` を利用者か対話セッションが手で行う（[チュートリアル](https://github.com/loombeading/loom/blob/main/docs/tutorial.md)「実行者を用意しないとき」）。実行者を使うときは、その実行者の文書が既定を上書きしてよい。上書きできるのは、実行者の起動のしかた・`wait:` ラベルの拡張種別・通知の出し方・受入と merge と close の担い手・PR の題名と本文の検査だけである。実行者の文書は、利用者が実行者に読ませる規約ファイルに 1 項目 1 行で上書きを書いたものを指し、書き方と置き場所は[用語集](https://github.com/loombeading/loom/blob/main/docs/glossary.md)「実行者」に従う。上書きが無い項目は既定のとおりに動く。
+既定の運用は本書と `docs/` に書いたとおりで、実行者を用意しなくても完結する。既定では、`lm gate sweep` と `wait:`・`done:` ラベルの確かめ、PR の受入・merge・`lm close` を利用者か対話セッションが手で行う（[チュートリアル](https://github.com/loombeading/loom/blob/main/docs/tutorial.md)「実行者を用意しないとき」）。既定では、人向け Gate（`kind:human`・`kind:confirm`）は利用者の明示の指示があったときだけ resolve し、受入・出荷・方針の判断は利用者が行い、着手する Bead は利用者が選ぶか着手を確認し、push と PR の作成は利用者に確認してから行う。実行者を使うときは、その実行者の文書が既定を上書きしてよい。上書きできるのは、実行者の起動のしかた・`wait:` ラベルの拡張種別・通知の出し方・受入と merge と close の担い手・PR の題名と本文の検査・人向け Gate の resolve の担い手・判定者に委ねる判断の範囲・着手する Bead の選び方・push と PR 作成の確認だけである。実行者の文書は、利用者が実行者に読ませる規約ファイルに 1 項目 1 行で上書きを書いたものを指し、書き方と置き場所は[用語集](https://github.com/loombeading/loom/blob/main/docs/glossary.md)「実行者」に従う。上書きが無い項目は既定のとおりに動く。
 
-本書と `docs/` から張る `https://github.com/loombeading/loom/blob/main/...` のリンク（チュートリアル・用語集など）は、リポジトリの `main` にある最新版を指す。skill をコピーして使っていて、リンク先の記述とコピーした版が食い違うときは、skill を最新版でコピーし直す。
+本書と `docs/` から張る `https://github.com/loombeading/loom/blob/main/...` のリンク（チュートリアル・用語集など）は、リンク中の `blob/main/` を導入した版のタグ（例: `blob/v0.2610.1/`）に置き換えて読む。skill をコピーして使っていて、リンク先の記述とコピーした版が食い違うときは、導入した版のタグのリンク先を正とし、版を上げるときは同じタグの skill を入れる。
 
 ## 前提
 
@@ -57,7 +57,7 @@ claim は、止まったことを検知して再開できる実行者（cron や
 1. `lm ready --claim` — 着手可能な Bead の一覧と、その先頭 1 件の排他取得（`open` → `in_progress`）を 1 回のコマンド・1 トランザクションで行う。出力の `Claimed: <id>` が実際に claim された Bead を示す。何も claim されなければ `lm ready` と同じ出力になる。
    - 先頭以外の特定の Bead を選んで claim したい場合は、`lm ready` で一覧してから `lm update <id> --claim` で個別に claim する。
    - `lm ready` が空なら `lm blocked` で「何が何をブロックしているか」を確認する。空を「やることがない」と早期に判断しない。
-   - 先頭が入れ替わっていても、そのまま次の先頭を拾う。順序は Ready の並びと依存で決まっているので、利用者には聞かない。
+   - 着手する Bead は、既定では利用者が選んだものか、利用者に着手を確かめたものにする。他のエージェントの起票や `lm import` で入った Bead も同じ扱いにする。実行者の文書が「着手する Bead の選び方」を上書きしていれば、それに従う（例: Ready の先頭を順に拾う）。
 2. 作業する。
 3. 作業中に派生課題を見つけたら、まず `lm search <語>` で重複が無いか確認し、無ければ `lm create --title "..." --description "..." --discovered-from <src-id>` で、今のタスクから派生したことを明示して起票する（生成とリンクが 1 トランザクションになり、派生元がマイルストーンに所属していれば、`lm` が派生元（派生元が `milestone` ラベルを持たなければその親）を親として張るので `--parent` も `--no-milestone` も要らない）。新しい Bead を作らない場合は `lm dep add <new-id> <src-id> --type discovered-from` で張る。残作業の切り出しを親子で結ぶと、元の Bead の `lm close` が未完了の子で拒否される。既存の Bead 同士の依存に気付いたら `lm dep add` で張る（着手の順序を判断した根拠が依存なら、答える前に張る）。`lm search` で既存の重複が見つかったら新規作成せず`lm dep add <new-id> <existing-id> --type duplicates --reason "..."` で結び付ける。リンク種別は`blocks` / `parent-child` / `discovered-from` / `duplicates` の 4 種のみ。
    - 起票する前に `lm ahead` の `## Milestones` を見る。所属するマイルストーンの Epic があれば `lm create` に `--parent <Epic ID>` を付け、優先度はその Epic と同じ段から選ぶ。どのマイルストーンにも所属しないなら、そのことを `--reason` に書く（`docs/milestone.md`）。マイルストーンが発散・逆転しているなど到達に向かっていないと分かったら、`docs/milestone-review.md` の手順で調整する。
@@ -70,7 +70,7 @@ claim は、止まったことを検知して再開できる実行者（cron や
    - 対話セッションが `lm gate` を見たときは `docs/gate.md`「Gate の整理」に従い、聞き返さず自分で分類して処理する。
    - 判断待ちの Bead を Ready に置かない。着手できない理由（期日・判断待ち）があるなら必ず Gate で塞ぐ（`lm ready` にあるものは着手する、が規約）。
    - Gate 自体は `lm update --status cancelled` / `--reopen` では終端化できない（`lm gate resolve` / `lm gate reject` 以外は Rejected になる）。
-   - PR を作ったら `lm update <id> --external-ref <PR URL>` を張る（`docs/pr.md`）。受入（PR の差分とテスト結果を確かめ、merge してよいと認めること。[用語集](https://github.com/loombeading/loom/blob/main/docs/glossary.md)「受入」）と merge と merge 後の `lm close` は、既定では利用者か対話セッションが行う。実行者の文書がこの担い手を上書きしていれば、それに従う。
+   - push と PR の作成は、既定では利用者に確認してから行う（実行者の文書が「push と PR 作成の確認」を上書きしていれば、それに従う）。PR を作ったら `lm update <id> --external-ref <PR URL>` を張る（`docs/pr.md`）。受入（PR の差分とテスト結果を確かめ、merge してよいと認めること。[用語集](https://github.com/loombeading/loom/blob/main/docs/glossary.md)「受入」）と merge と merge 後の `lm close` は、既定では利用者か対話セッションが行う。実行者の文書がこの担い手を上書きしていれば、それに従う。
 5. `lm close <id> --summary "<要約>" --reason "..."` — 完了したら要約と理由を添えてクローズする。要約は、閉じたあとの `lm show` で本文の代わりに出る（`docs/memory.md`）。クローズの出力には、それによって新たに Ready になった Bead が含まれる。次に何を claim すべきかの手がかりとして使う。
 
 ## 優先度

@@ -107,6 +107,13 @@ func UpdateBead(ctx context.Context, tx *sql.Tx, in UpdateInput) ([]string, erro
 		return nil, &ValidationError{Msg: "--claim-ttl must be positive and requires --claim"}
 	}
 
+	if err := ValidateIdentValues("label", in.AddLabels...); err != nil {
+		return nil, err
+	}
+	if err := ValidateIdentValues("external_ref", in.AddExternalRefs...); err != nil {
+		return nil, err
+	}
+
 	row, err := loadBeadRow(ctx, tx, in.ID)
 	if err != nil {
 		return nil, err

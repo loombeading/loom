@@ -129,6 +129,9 @@ func Run(ctx context.Context, tx *sql.Tx, r io.Reader, opt Options) (*Summary, e
 		if err := renamedKeyError(lineNo, typ, row); err != nil {
 			return nil, err
 		}
+		if err := identCharsError(lineNo, typ, row); err != nil {
+			return nil, err
+		}
 		switch typ {
 		case "bead":
 			beadRows = append(beadRows, row)

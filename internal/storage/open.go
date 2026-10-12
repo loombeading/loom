@@ -12,7 +12,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -24,18 +23,9 @@ const (
 	ModeImmutable = "immutable"
 )
 
-var ErrReadOnlyWrite = errors.New("write attempted on a read-only database (LM_READONLY is set)")
+var ErrReadOnlyWrite = errors.New("write attempted on a read-only database (the database file or its directory is not writable)")
 
 var ErrDBNotFound = errors.New("loom.db not found (set LM_DIR or run \"lm init\")")
-
-func IsReadOnlyEnv(v string) bool {
-	switch strings.ToLower(v) {
-	case "", "0", "false", "no":
-		return false
-	default:
-		return true
-	}
-}
 
 type OpenOptions struct {
 	Env Env
@@ -81,7 +71,7 @@ func Open(ctx context.Context, dir string, opts OpenOptions) (*DB, error) {
 		}
 	}
 
-	readOnly := IsReadOnlyEnv(opts.Env("LM_READONLY"))
+	readOnly := !dbWritable(dir, dbPath)
 
 	var mode string
 	if readOnly {
@@ -139,6 +129,15 @@ func buildDSN(dbPath string, readOnly bool, mode string, busyTimeoutMS int) (str
 	}
 
 	return "file:" + filepath.ToSlash(absPath) + "?" + q.Encode(), nil
+}
+
+func dbWritable(dir, dbPath string) bool {
+	f, err := os.OpenFile(dbPath, os.O_WRONLY, 0)
+	if err != nil {
+		return errors.Is(err, os.ErrNotExist)
+	}
+	_ = f.Close()
+	return dirWritable(dir)
 }
 
 func dirWritable(dir string) bool {

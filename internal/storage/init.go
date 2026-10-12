@@ -18,10 +18,6 @@ type InitResult struct {
 }
 
 func Init(ctx context.Context, dir string, opts OpenOptions) (*InitResult, error) {
-	if opts.Env != nil && IsReadOnlyEnv(opts.Env("LM_READONLY")) {
-		return nil, ErrReadOnlyWrite
-	}
-
 	dbPath := DBPath(dir)
 	if _, err := os.Stat(dbPath); err == nil {
 		return nil, ErrAlreadyInitialized

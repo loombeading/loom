@@ -76,7 +76,7 @@ func warnDiscoveredFromFanout(db *storage.DB, stderr io.Writer, beadID, beadName
 		return
 	}
 	fmt.Fprintf(stderr, "警告: %s の discovered-from 派生数が閾値(%d)を超えた（現在%d件）。仕様の詰め直しか根本原因の起票を検討する\n",
-		domain.DisplayID(dependsNamespace, dependsOnID, shortLen), domain.DiscoveredFromFanoutWarnThreshold, n)
+		output.EscapeInline(domain.DisplayID(dependsNamespace, dependsOnID, shortLen)), domain.DiscoveredFromFanoutWarnThreshold, n)
 }
 
 func runDepChange(sub, verb string, op func(ctx context.Context, tx *sql.Tx, actor, beadID, dependsOnID, depType, occurredAt, reason string) error, afterOp func(db *storage.DB, stderr io.Writer, beadID, beadNamespace, dependsOnID, dependsNamespace, depType string, shortLen domain.ShortIDs), args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -197,7 +197,7 @@ func runDepChange(sub, verb string, op func(ctx context.Context, tx *sql.Tx, act
 	}
 
 	fmt.Fprintf(stdout, "- %s: %s %s %s (%s)\n",
-		verb, domain.DisplayID(beadNamespace, beadID, n), linkPhrase(depType), domain.DisplayID(dependsNamespace, dependsOnID, n), depType)
+		verb, output.EscapeInline(domain.DisplayID(beadNamespace, beadID, n)), linkPhrase(depType), output.EscapeInline(domain.DisplayID(dependsNamespace, dependsOnID, n)), depType)
 	writePriorityChanges(stdout, changes)
 	_, _ = blocked.WriteTo(stdout)
 	return 0
@@ -256,11 +256,11 @@ func priorityChanges(ctx context.Context, tx *sql.Tx, before map[string]domain.E
 	for _, c := range cs {
 		disp, derr := sourceDisplayID(ctx, tx, resolver, c.bead.ID, n)
 		err = errors.Join(err, derr)
-		line := fmt.Sprintf("- %s P%d→P%d", disp, c.old, c.new)
+		line := fmt.Sprintf("- %s P%d→P%d", output.EscapeInline(disp), c.old, c.new)
 		if src := after[c.bead.ID].Source; src != "" {
 			sd, derr := sourceDisplayID(ctx, tx, resolver, src, n)
 			err = errors.Join(err, derr)
-			line += " (via " + sd + ")"
+			line += " (via " + output.EscapeInline(sd) + ")"
 		}
 		lines = append(lines, line)
 	}

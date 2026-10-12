@@ -255,14 +255,13 @@ func TestRunWhereReadOnly(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	setIsolatedXDGHome(t)
-	t.Setenv("LM_READONLY", "0")
 
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"init"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("init: exit code = %d, stderr = %q", code, stderr.String())
 	}
 
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 	stdout.Reset()
 	stderr.Reset()
 	if code := run([]string{"where"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
@@ -277,7 +276,6 @@ func TestRunUpdateReadOnlyRejectsToStderr(t *testing.T) {
 	dir := t.TempDir()
 	t.Chdir(dir)
 	setIsolatedXDGHome(t)
-	t.Setenv("LM_READONLY", "0")
 
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"init"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
@@ -290,12 +288,12 @@ func TestRunUpdateReadOnlyRejectsToStderr(t *testing.T) {
 	}
 	id := mustParseCreatedID(t, stdout.String())
 
-	t.Setenv("LM_READONLY", "1")
+	makeDBReadOnly(t)
 	stdout.Reset()
 	stderr.Reset()
 	code := run([]string{"update", id, "--priority", "2"}, strings.NewReader(""), &stdout, &stderr)
 	if code != 1 {
-		t.Fatalf("update under LM_READONLY=1: exit code = %d, want 1", code)
+		t.Fatalf("update on a read-only DB: exit code = %d, want 1", code)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
@@ -305,32 +303,57 @@ func TestRunUpdateReadOnlyRejectsToStderr(t *testing.T) {
 	}
 }
 
-func TestRunUpdateReadOnlyTruthyValueRejectsWrite(t *testing.T) {
+func TestRunNonWritableDBDirReadsAndRejectsWrites(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
 	dir := t.TempDir()
 	t.Chdir(dir)
 	setIsolatedXDGHome(t)
-	t.Setenv("LM_READONLY", "0")
 
 	var stdout, stderr bytes.Buffer
 	if code := run([]string{"init"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("init: exit code = %d, stderr = %q", code, stderr.String())
 	}
 	stdout.Reset()
-	stderr.Reset()
 	if code := run([]string{"create", "--title", "t"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
 		t.Fatalf("create: exit code = %d, stderr = %q", code, stderr.String())
 	}
 	id := mustParseCreatedID(t, stdout.String())
+	stdout.Reset()
+	if code := run([]string{"where"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("where: exit code = %d, stderr = %q", code, stderr.String())
+	}
+	_, after, ok := strings.Cut(stdout.String(), "- Database: ")
+	if !ok {
+		t.Fatalf("where stdout = %q, want a Database line", stdout.String())
+	}
+	dbPath, _, _ := strings.Cut(after, "\n")
+	dbDir := filepath.Dir(dbPath)
+	for _, f := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		_ = os.Chmod(f, 0o444)
+	}
+	if err := os.Chmod(dbDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dbDir, 0o755) })
 
-	t.Setenv("LM_READONLY", "true")
 	stdout.Reset()
 	stderr.Reset()
-	code := run([]string{"update", id, "--title", "renamed"}, strings.NewReader(""), &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("update under LM_READONLY=true: exit code = %d, want 1", code)
+	if code := run([]string{"list"}, strings.NewReader(""), &stdout, &stderr); code != 0 {
+		t.Fatalf("list on non-writable DB dir: exit code = %d, stderr = %q", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "Rejected") {
-		t.Fatalf("stderr = %q, want it to contain Rejected", stderr.String())
+	if !strings.Contains(stdout.String(), id) {
+		t.Fatalf("list stdout = %q, want %s", stdout.String(), id)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"create", "--title", "u"}, strings.NewReader(""), &stdout, &stderr); code != 1 {
+		t.Fatalf("create on non-writable DB dir: exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stdout.String()+stderr.String(), "not writable") {
+		t.Fatalf("create stdout = %q, stderr = %q, want the not-writable reason", stdout.String(), stderr.String())
 	}
 }
 

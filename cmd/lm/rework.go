@@ -98,6 +98,6 @@ func runReworkAdd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	}
 
 	fmt.Fprintf(stdout, "- Rework recorded: %s (cause: %s)\n",
-		domain.DisplayID(namespace, id, n), *cause)
+		output.EscapeInline(domain.DisplayID(namespace, id, n)), *cause)
 	return 0
 }

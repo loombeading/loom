@@ -40,6 +40,18 @@ func beadsDBPath(t *testing.T) string {
 	return storage.DBPath(beadsDir(t))
 }
 
+func makeDBReadOnly(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores file permissions")
+	}
+	p := beadsDBPath(t)
+	if err := os.Chmod(p, 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(p, 0o644) })
+}
+
 func setIsolatedXDGHome(t *testing.T) {
 	t.Helper()
 	t.Setenv("LM_DIR", "")
@@ -268,6 +280,41 @@ func TestCreateAndUpdateRejectReleaseLabel(t *testing.T) {
 	}
 	if !strings.Contains(out, `labels: ["exempt:milestone"]`) {
 		t.Errorf("show output = %q, want only exempt:milestone (rejected update wrote nothing)", out)
+	}
+}
+
+func TestWritesRejectForbiddenIdentChars(t *testing.T) {
+	initBeadsDir(t)
+	id := mustCreateBead(t, "--title", "t", "--no-milestone", "x")
+	cases := map[string][]string{
+		"create label":        {"create", "--title", "bad", "--no-milestone", "x", "--label", "a\nb"},
+		"create external-ref": {"create", "--title", "bad", "--no-milestone", "x", "--external-ref", "u\x1b[31m"},
+		"update add-label":    {"update", id, "--add-label", "a\u200Bb"},
+		"update external-ref": {"update", id, "--external-ref", "x\u202Ey"},
+		"actor flag":          {"create", "--title", "bad", "--no-milestone", "x", "--actor", "me\tyou"},
+	}
+	for name, args := range cases {
+		t.Run(name, func(t *testing.T) {
+			outS, errS, code := runCmd(t, args, "")
+			if code != 1 {
+				t.Fatalf("exit code = %d, want 1 (stderr %q)", code, errS)
+			}
+			if !strings.Contains(outS+errS, "forbidden character U+") {
+				t.Errorf("stdout = %q, stderr = %q, want forbidden character U+XXXX", outS, errS)
+			}
+		})
+	}
+	t.Setenv("LM_ACTOR", "bot\u2066")
+	if outS, errS, code := runCmd(t, []string{"update", id, "--title", "renamed"}, ""); code != 1 || !strings.Contains(outS+errS, "actor contains forbidden character U+2066") {
+		t.Errorf("LM_ACTOR with U+2066: code = %d, stdout = %q, stderr = %q", code, outS, errS)
+	}
+	t.Setenv("LM_ACTOR", "")
+	out, _, _ := runCmd(t, []string{"export"}, "")
+	if strings.Contains(out, "bad") || strings.Contains(out, "renamed") || strings.Count(out, `"_type":"bead"`) != 1 || !strings.Contains(out, `"labels":["exempt:milestone"]`) || !strings.Contains(out, `"external_refs":[]`) {
+		t.Errorf("rejected writes left traces in export:\n%s", out)
+	}
+	if _, errS, code := runCmd(t, []string{"import", "-"}, out); code != 0 {
+		t.Errorf("export did not round-trip through import: %s", errS)
 	}
 }
 
@@ -606,18 +653,6 @@ func TestExternalRefDefaultNone(t *testing.T) {
 	}
 	if !strings.Contains(out, `external_refs: []`) {
 		t.Errorf(`show output = %q, want external_refs: []`, out)
-	}
-}
-
-func TestExternalRefEscapedInShow(t *testing.T) {
-	initBeadsDir(t)
-	id := mustCreateBead(t, "--title", "t", "--external-ref", "a|b\nc")
-	out, _, code := runCmd(t, []string{"show", id}, "")
-	if code != 0 {
-		t.Fatalf("show: exit code = %d", code)
-	}
-	if strings.Contains(out, "a|b\nc") {
-		t.Errorf("show output contains unescaped external-ref value:\n%s", out)
 	}
 }
 

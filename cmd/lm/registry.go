@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/loombeading/loom/internal/output"
@@ -239,15 +240,16 @@ func handlers() map[string]cmdEntry {
 	return m
 }
 
-var environmentVars = []struct{ name, desc string }{
+type envVar struct{ name, desc string }
+
+var environmentVars = slices.Concat([]envVar{
 	{"LM_DIR", "absolute path to the loom directory; no parent-directory search"},
 	{"LM_NAMESPACE", "default namespace filter for enumeration commands"},
 	{"LM_ACTOR", "default acting user for the audit log"},
-	{"LM_READONLY", "any value other than \"\"/0/false/no opens the database read-only"},
-	{"LM_NOW", "override the current instant for acceptance tests and diagnostics"},
+}, testClockEnv, []envVar{
 	{"NO_COLOR", "any value suppresses ANSI decoration"},
 	{"LM_COLOR", "\"always\" forces ANSI decoration unless NO_COLOR is also set"},
-}
+})
 
 const (
 	helpCommandLine       = "- help — Show this help or a command's usage"
