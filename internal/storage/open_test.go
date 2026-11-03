@@ -71,6 +71,50 @@ func TestOpenAppliesPragmas(t *testing.T) {
 	}
 }
 
+func TestEDD6OpenAppliesMemoryPragmas(t *testing.T) {
+	requireNonRoot(t)
+	want := map[string]int{
+		"cache_size": -65536,
+		"temp_store": 2,
+		"mmap_size":  268435456,
+	}
+	check := func(t *testing.T, db *DB) {
+		t.Helper()
+		for pragma, w := range want {
+			var got int
+			if err := db.SQL.QueryRowContext(t.Context(), `PRAGMA `+pragma).Scan(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got != w {
+				t.Errorf("%s = %d, want %d", pragma, got, w)
+			}
+		}
+	}
+
+	t.Run("writable", func(t *testing.T) {
+		check(t, openWritable(t, mustMkdirBeads(t)))
+	})
+	t.Run("read-only", func(t *testing.T) {
+		dir := mustMkdirBeads(t)
+		_ = openWritable(t, dir).Close()
+		_ = os.Remove(DBPath(dir) + "-shm")
+		_ = os.Remove(DBPath(dir) + "-wal")
+		if err := os.Chmod(DBPath(dir), 0o444); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(DBPath(dir), 0o644) })
+		db, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		if !db.ReadOnly {
+			t.Fatal("ReadOnly = false, want true")
+		}
+		check(t, db)
+	})
+}
+
 func TestOpenBusyTimeoutOverride(t *testing.T) {
 	dir := mustMkdirBeads(t)
 	db, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil), Actor: "test", BusyTimeoutMS: 1234, AllowCreate: true})
@@ -129,6 +173,29 @@ func TestOpenNewerSchemaIsRejected(t *testing.T) {
 	_, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil), Actor: "test"})
 	if !errors.Is(err, ErrSchemaTooNew) {
 		t.Fatalf("err = %v, want ErrSchemaTooNew", err)
+	}
+}
+
+func TestOpenSkipSchemaCheckOpensMismatchedSchema(t *testing.T) {
+	for _, version := range []int{999, 0} {
+		dir := mustMkdirBeadsAtVersion(t, version)
+
+		if _, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil), Actor: "test"}); err == nil {
+			t.Fatalf("version %d: Open without SkipSchemaCheck succeeded, want a schema error", version)
+		}
+
+		db, err := Open(context.Background(), dir, OpenOptions{Env: envMap(nil), Actor: "test", SkipSchemaCheck: true})
+		if err != nil {
+			t.Fatalf("version %d: Open with SkipSchemaCheck: %v", version, err)
+		}
+		got, err := userVersion(context.Background(), db.SQL)
+		_ = db.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != version {
+			t.Fatalf("user_version = %d, want %d (SkipSchemaCheck must not migrate)", got, version)
+		}
 	}
 }
 

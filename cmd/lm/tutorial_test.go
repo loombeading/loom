@@ -95,10 +95,44 @@ func splitTutorialCommand(line string) []string {
 type tutorialIDs struct {
 	toActual map[string]string
 	toDoc    map[string]string
+	canon    func(string) string
+	cache    map[string]string
 }
 
-func (m *tutorialIDs) bind(t *testing.T, doc, actual string) {
+func newTutorialIDs(canon func(string) string) *tutorialIDs {
+	return &tutorialIDs{toActual: map[string]string{}, toDoc: map[string]string{}, canon: canon, cache: map[string]string{}}
+}
+
+func tutorialShowCanon(t *testing.T) func(string) string {
 	t.Helper()
+	return func(id string) string {
+		out, _, code := runCmd(t, []string{"show", id}, "")
+		if code != 0 {
+			return id
+		}
+		for line := range strings.SplitSeq(out, "\n") {
+			if strings.HasPrefix(line, "id: ") {
+				return frontMatterStringValue(line, "id")
+			}
+		}
+		return id
+	}
+}
+
+func (m *tutorialIDs) resolve(id string) string {
+	if c, ok := m.cache[id]; ok {
+		return c
+	}
+	c := m.canon(id)
+	if c != id {
+		m.cache[id] = c
+	}
+	return c
+}
+
+func (m *tutorialIDs) bind(t *testing.T, doc, shown string) {
+	t.Helper()
+	actual := m.resolve(shown)
 	if got, ok := m.toActual[doc]; ok && got != actual {
 		t.Fatalf("tutorial ID %s maps to both %s and %s", doc, got, actual)
 	}
@@ -127,10 +161,11 @@ func (m *tutorialIDs) matchLine(t *testing.T, want, actual string) bool {
 		return false
 	}
 	for i, doc := range docIDs {
-		if a, ok := m.toActual[doc]; ok && a != sub[i+1] {
+		shown := m.resolve(sub[i+1])
+		if a, ok := m.toActual[doc]; ok && a != shown {
 			return false
 		}
-		if d, ok := m.toDoc[sub[i+1]]; ok && d != doc {
+		if d, ok := m.toDoc[shown]; ok && d != doc {
 			return false
 		}
 	}
@@ -180,6 +215,24 @@ func tutorialFreshDB(t *testing.T) {
 	tutorialMustRun(t, "init")
 }
 
+func TestTutorialIDsMatchLineAfterAliasGrows(t *testing.T) {
+	table := map[string]string{"id-xds": "X", "id-xdsk": "X", "id-abc": "Y"}
+	canon := func(id string) string {
+		if c, ok := table[id]; ok {
+			return c
+		}
+		return id
+	}
+	ids := newTutorialIDs(canon)
+	ids.bind(t, "id-z09", "id-xds")
+	if !ids.matchLine(t, "- id-z09 title", "- id-xdsk title") {
+		t.Errorf("grown alias id-xdsk does not match id-z09 bound to id-xds")
+	}
+	if ids.matchLine(t, "- id-z09 title", "- id-abc title") {
+		t.Errorf("a different ID matched id-z09")
+	}
+}
+
 func TestTutorialCommandsMatchOutput(t *testing.T) {
 	text, err := os.ReadFile(filepath.Join("..", "..", "docs", "tutorial.md"))
 	if err != nil {
@@ -194,10 +247,10 @@ func TestTutorialCommandsMatchOutput(t *testing.T) {
 	time.Local = time.FixedZone("JST", 9*60*60)
 	t.Cleanup(func() { time.Local = local })
 
-	ids := &tutorialIDs{toActual: map[string]string{}, toDoc: map[string]string{}}
+	ids := newTutorialIDs(tutorialShowCanon(t))
 	fresh := func() {
 		tutorialFreshDB(t)
-		ids = &tutorialIDs{toActual: map[string]string{}, toDoc: map[string]string{}}
+		ids = newTutorialIDs(tutorialShowCanon(t))
 	}
 	gatesAhead := func() {
 		fresh()
@@ -252,6 +305,7 @@ func TestTutorialCommandsMatchOutput(t *testing.T) {
 			}
 			if args[0] == "import" {
 				tutorialFreshDB(t)
+				ids.cache = map[string]string{}
 			}
 			out := tutorialMustRun(t, args...)
 			if redirect != "" {

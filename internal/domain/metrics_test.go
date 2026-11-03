@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -69,66 +70,6 @@ func TestDerivedMetricsEmptyIDsReturnsEmptyMap(t *testing.T) {
 	}
 }
 
-func TestDerivedMetricsBlastRadiusCountsDirectOpenBlockers(t *testing.T) {
-	db := testDB(t)
-	target := mustCreate(t, db, CreateInput{Title: "target", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n1"})
-	blockedOpen1 := mustCreate(t, db, CreateInput{Title: "b1", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n2"})
-	blockedOpen2 := mustCreate(t, db, CreateInput{Title: "b2", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n3"})
-	blockedClosed := mustCreate(t, db, CreateInput{Title: "b3", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n4"})
-	blockedRemovedLink := mustCreate(t, db, CreateInput{Title: "b4", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n5"})
-
-	mustNoErr(t, mustAddLink(t, db, blockedOpen1, target, BlocksDepType))
-	mustNoErr(t, mustAddLink(t, db, blockedOpen2, target, BlocksDepType))
-	mustNoErr(t, mustAddLink(t, db, blockedClosed, target, BlocksDepType))
-	mustNoErr(t, mustAddLink(t, db, blockedRemovedLink, target, BlocksDepType))
-
-	mustNoErr(t, mustCloseBead(t, db, blockedClosed, "n10"))
-	mustNoErr(t, mustRemoveLink(t, db, blockedRemovedLink, target, BlocksDepType))
-
-	got, err := DerivedMetrics(context.Background(), db, []string{target})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[target].BlastRadius != 2 {
-		t.Errorf("BlastRadius = %d, want 2 (got %+v)", got[target].BlastRadius, got[target])
-	}
-}
-
-func TestDerivedMetricsRetryCountCountsReleaseAndForceRelease(t *testing.T) {
-	db := testDB(t)
-	id := mustCreate(t, db, CreateInput{Title: "x", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n1"})
-
-	mustNoErr(t, mustUpdate(t, db, UpdateInput{Priority: -1, ID: id, Claim: true, Actor: "alice", Now: "n2"}))
-	mustNoErr(t, mustUpdate(t, db, UpdateInput{Priority: -1, ID: id, Release: true, Actor: "alice", Now: "n3"}))
-	mustNoErr(t, mustUpdate(t, db, UpdateInput{Priority: -1, ID: id, Claim: true, Actor: "bob", Now: "n4"}))
-	mustNoErr(t, mustUpdate(t, db, UpdateInput{Priority: -1, ID: id, Release: true, Force: true, Actor: "carol", Now: "n5"}))
-	mustNoErr(t, mustUpdate(t, db, UpdateInput{Priority: -1, ID: id, Claim: true, Actor: "dave", Now: "n6"}))
-
-	got, err := DerivedMetrics(context.Background(), db, []string{id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[id].RetryCount != 2 {
-		t.Errorf("RetryCount = %d, want 2 (got %+v)", got[id].RetryCount, got[id])
-	}
-}
-
-func TestDerivedMetricsTokenCostSumsInAndOut(t *testing.T) {
-	db := testDB(t)
-	id := mustCreate(t, db, CreateInput{Title: "x", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n1"})
-
-	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: id, TokensIn: 100, TokensOut: 50, Actor: "alice", Now: "n2"}))
-	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: id, TokensIn: 20, TokensOut: 5, Actor: "bob", Now: "n3"}))
-
-	got, err := DerivedMetrics(context.Background(), db, []string{id})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got[id].TokenCost != 175 {
-		t.Errorf("TokenCost = %d, want 175 (got %+v)", got[id].TokenCost, got[id])
-	}
-}
-
 func TestDerivedMetricsReworkCountCountsFieldRework(t *testing.T) {
 	db := testDB(t)
 	id := mustCreate(t, db, CreateInput{Title: "x", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n1"})
@@ -148,6 +89,26 @@ func TestDerivedMetricsReworkCountCountsFieldRework(t *testing.T) {
 	}
 	if got[id].ReworkCount != 2 {
 		t.Errorf("ReworkCount = %d, want 2 (got %+v)", got[id].ReworkCount, got[id])
+	}
+}
+
+func TestDerivedMetricsReworkCountIgnoresOtherFields(t *testing.T) {
+	db := testDB(t)
+	id := mustCreate(t, db, CreateInput{Title: "x", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n1"})
+
+	for i, field := range []string{"rework", "release", "force_release", "claim"} {
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO audit_log (occurred_at, actor, bead_id, kind, field, new_value, origin) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			"n"+string(rune('2'+i)), "u", id, "field", field, "v", "local"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := DerivedMetrics(context.Background(), db, []string{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[id].ReworkCount != 1 {
+		t.Errorf("ReworkCount = %d, want 1 (only field=rework counts; got %+v)", got[id].ReworkCount, got[id])
 	}
 }
 
@@ -190,20 +151,23 @@ func TestDerivedMetricsBatchesMultipleIDsInOneCallEach(t *testing.T) {
 	db := testDB(t)
 	a := mustCreate(t, db, CreateInput{Title: "a", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n1"})
 	b := mustCreate(t, db, CreateInput{Title: "b", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n2"})
-	blockerOfA := mustCreate(t, db, CreateInput{Title: "ba", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: "n3"})
-	mustNoErr(t, mustAddLink(t, db, blockerOfA, a, BlocksDepType))
 
-	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: b, TokensIn: 1, TokensOut: 1, Actor: "u", Now: "n5"}))
+	for i, id := range []string{a, b, b} {
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO audit_log (occurred_at, actor, bead_id, kind, field, new_value, origin) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			fmt.Sprintf("n%d", i+3), "u", id, "field", "rework", "ci", "local"); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	got, err := DerivedMetrics(context.Background(), db, []string{a, b})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got[a].BlastRadius != 1 {
-		t.Errorf("a.BlastRadius = %d, want 1", got[a].BlastRadius)
+	if got[a].ReworkCount != 1 {
+		t.Errorf("a.ReworkCount = %d, want 1", got[a].ReworkCount)
 	}
-	if got[b].TokenCost != 2 {
-		t.Errorf("b.TokenCost = %d, want 2", got[b].TokenCost)
+	if got[b].ReworkCount != 2 {
+		t.Errorf("b.ReworkCount = %d, want 2", got[b].ReworkCount)
 	}
 }
 

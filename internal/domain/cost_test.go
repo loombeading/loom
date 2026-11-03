@@ -162,6 +162,49 @@ func TestGetTokenCostTotalSumsDescendants(t *testing.T) {
 	}
 }
 
+func TestGetTokenCostTotalStopsAtDepth64(t *testing.T) {
+	db := testDB(t)
+	root := createForCost(t, db)
+	ids := []string{root}
+	for i := 1; i <= 65; i++ {
+		child := createForCost(t, db)
+		mustNoErr(t, mustAddLink(t, db, child, ids[i-1], ParentChildDepType))
+		ids = append(ids, child)
+	}
+	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: ids[64], TokensIn: 7, TokensOut: 0, Actor: "alice", Now: "n1"}))
+	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: ids[65], TokensIn: 1000, TokensOut: 0, Actor: "alice", Now: "n2"}))
+
+	total, err := GetTokenCostTotal(context.Background(), db, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 7 {
+		t.Errorf("GetTokenCostTotal(root) = %d, want 7 (depth 64 is included, depth 65 is not)", total)
+	}
+}
+
+func TestGetTokenCostTotalTerminatesOnCycle(t *testing.T) {
+	db := testDB(t)
+	a := createForCost(t, db)
+	b := createForCost(t, db)
+	for _, pair := range [][2]string{{a, b}, {b, a}} {
+		if _, err := db.ExecContext(t.Context(), `INSERT INTO dependencies (bead_id, depends_on_id, type, created_at, removed) VALUES (?, ?, ?, ?, 0)`,
+			pair[0], pair[1], ParentChildDepType, "n0"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: a, TokensIn: 3, TokensOut: 0, Actor: "alice", Now: "n1"}))
+	mustNoErr(t, mustAddTokenCost(t, db, AddTokenCostInput{BeadID: b, TokensIn: 40, TokensOut: 0, Actor: "alice", Now: "n2"}))
+
+	total, err := GetTokenCostTotal(context.Background(), db, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 43 {
+		t.Errorf("GetTokenCostTotal(a) = %d, want 43 (each bead in the cycle counted once)", total)
+	}
+}
+
 func TestGetTokenCostTotalExcludesRemovedLink(t *testing.T) {
 	db := testDB(t)
 	epic := createForCost(t, db)

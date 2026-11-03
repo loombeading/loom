@@ -57,8 +57,8 @@ func checkExpedite(ctx context.Context, tx *sql.Tx, id string, span time.Duratio
 	}
 	var open int
 	if err := tx.QueryRowContext(ctx,
-		`SELECT count(*) FROM beads WHERE expedite_until > ? AND status IN (?, ?) AND id <> ?`,
-		FormatTime(now), StatusOpen, StatusInProgress, id).Scan(&open); err != nil {
+		`SELECT count(*) FROM beads WHERE expedite_until > ? AND status = ? AND id <> ?`,
+		FormatTime(now), StatusOpen, id).Scan(&open); err != nil {
 		return "", fmt.Errorf("expedite: count open expedites: %w", err)
 	}
 	if maxOpen := coefficients.Int(CoefficientExpediteMaxOpen); open >= maxOpen {

@@ -109,6 +109,28 @@ type aheadView struct {
 	byType      map[string][]int
 	all         []int
 	throughput  []domain.ThroughputBead
+	tokens      map[string]int
+	pickups     map[string]estimate.ReleaseETAResult
+}
+
+func readyPickupETAs(ctx context.Context, q domain.Querier, now time.Time, throughput []domain.ThroughputBead, namespace string) (map[string]estimate.ReleaseETAResult, error) {
+	positions, err := domain.PickupPositions(ctx, q, now, releaseWindowHours)
+	if err != nil {
+		return nil, err
+	}
+	if namespace != "" {
+		throughput, err = domain.ThroughputInput(ctx, q, "")
+		if err != nil {
+			return nil, err
+		}
+	}
+	closedTotal, closedWithPR := closeVelocityCounts(throughput, now)
+	out := make(map[string]estimate.ReleaseETAResult, len(positions))
+	for id, p := range positions {
+		out[id] = estimate.ReleaseETA(now, releaseWindowHours, closedTotal, closedWithPR,
+			[]estimate.ReleaseWindow{{Remaining: p.Ahead, Created: p.Interrupts}})[0]
+	}
+	return out, nil
 }
 
 func aheadLines(ctx context.Context, q domain.Querier, now time.Time, namespace string, opts aheadOpts) ([]string, error) {
@@ -144,7 +166,11 @@ func aheadLines(ctx context.Context, q domain.Querier, now time.Time, namespace 
 	if err != nil {
 		return nil, err
 	}
-	v := &aheadView{ctx: ctx, q: q, n: n, namespace: namespace, opts: opts, resolver: resolver, domainBeads: domainBeads, beads: beads, byTypePrio: byTypePrio, byType: byType, all: all, throughput: throughput}
+	pickups, err := readyPickupETAs(ctx, q, now, throughput, namespace)
+	if err != nil {
+		return nil, err
+	}
+	v := &aheadView{ctx: ctx, q: q, n: n, namespace: namespace, opts: opts, resolver: resolver, domainBeads: domainBeads, beads: beads, byTypePrio: byTypePrio, byType: byType, all: all, throughput: throughput, tokens: tokenByBeadID, pickups: pickups}
 
 	placed := aheadPlacement(readyIDs, courses, gateWaiting, gateEntries, opts.allGateKinds)
 	listedRows, err := beadRowsUnsorted(listed, n, resolver)
@@ -212,7 +238,11 @@ func aheadLines(ctx context.Context, q domain.Querier, now time.Time, namespace 
 		sections = append(sections, courseSec)
 	}
 	outlookSec := outlookSection(now, v.outlookInput(now, gateEff, readyIDs, inProgress, gateWaiting, gateEntries))
-	sections = append(sections, unclassifiedSec, batchSec, readySec, inProgressSec, summarySec, outlookSec, releasesSec, gateWaitingSec)
+	flowSec, err := aheadFlowSection(ctx, q, now, namespace)
+	if err != nil {
+		return nil, err
+	}
+	sections = append(sections, unclassifiedSec, batchSec, readySec, inProgressSec, summarySec, flowSec, outlookSec, releasesSec, gateWaitingSec)
 	return assembleAhead(now, namespace, sections), nil
 }
 
@@ -472,6 +502,7 @@ func (v *aheadView) releasesSection(now time.Time, releases []domain.Bead, rows 
 		if !etas[i].Skip && !abolished {
 			line += "  eta=" + formatReleaseETA(etas[i])
 		}
+		line += "  " + v.milestoneTokens(e.bead.ID, g).String()
 		if judge[i] > 0 {
 			line += fmt.Sprintf("  judge=%d", judge[i])
 		}
@@ -496,6 +527,16 @@ func (v *aheadView) releasesSection(now time.Time, releases []domain.Bead, rows 
 	}
 }
 
+func (v *aheadView) milestoneTokens(root string, g releaseGraph) estimate.TokenBurn {
+	ids := append([]string{root}, releaseDescendants(root, g, v.domainBeads)...)
+	items := make([]estimate.TokenItem, len(ids))
+	for i, id := range ids {
+		est, _, ok := v.estimate(id)
+		items[i] = estimate.TokenItem{Status: v.domainBeads[id].Status, Tokens: v.tokens[id], Est: est, HasEst: ok}
+	}
+	return estimate.MilestoneTokens(items)
+}
+
 func hasAbolishedLabel(labels []string) bool {
 	for _, l := range labels {
 		if strings.HasPrefix(l, domain.AbolishedByLabelPrefix) {
@@ -507,9 +548,9 @@ func hasAbolishedLabel(labels []string) bool {
 
 const releaseWindowHours = 72
 
-func closeVelocityCounts(throughput []domain.ThroughputBead, now time.Time, windowHours float64) (int, int) {
+func closeVelocityCounts(throughput []domain.ThroughputBead, now time.Time) (int, int) {
 	var closedTotal, closedWithPR int
-	windowStart := now.Add(-time.Duration(windowHours * float64(time.Hour)))
+	windowStart := now.Add(-releaseWindowHours * time.Hour)
 	for _, tb := range throughput {
 		if tb.Closed && !tb.ClosedAt.IsZero() && tb.ClosedAt.After(windowStart) && !tb.ClosedAt.After(now) {
 			closedTotal++
@@ -527,7 +568,7 @@ func (v *aheadView) releaseETAs(now time.Time, entries []releaseEntry, g release
 	for _, tb := range v.throughput {
 		createdAt[tb.ID] = tb.CreatedAt
 	}
-	closedTotal, closedWithPR := closeVelocityCounts(v.throughput, now, releaseWindowHours)
+	closedTotal, closedWithPR := closeVelocityCounts(v.throughput, now)
 	cLo := float64(closedWithPR) / releaseWindowHours
 	cHi := float64(closedTotal) / releaseWindowHours
 	headerLines := []string{fmt.Sprintf("- Window: %dh closed=%d(PR %d) → %.2f〜%.2f/h", releaseWindowHours, closedTotal, closedWithPR, cLo, cHi)}
@@ -539,6 +580,7 @@ func (v *aheadView) releaseETAs(now time.Time, entries []releaseEntry, g release
 	judge := make([]int, len(entries))
 	for i, e := range entries {
 		var incRemaining, incCreated int
+		var pickups []estimate.ReleaseETAResult
 		floorGateIDs := map[string]bool{}
 		if heldByHumanGate(e.selfGates, gateKindByID) {
 			hasHumanGate[i] = true
@@ -555,6 +597,9 @@ func (v *aheadView) releaseETAs(now time.Time, entries []releaseEntry, g release
 			if unfinished && !claimedOpen[id] {
 				claimedOpen[id] = true
 				incRemaining++
+				if p, ready := v.pickups[id]; ready {
+					pickups = append(pickups, p)
+				}
 			}
 			if ca, ok := createdAt[id]; ok && ca.After(windowStart) && !ca.After(now) && !claimedCreated[id] {
 				claimedCreated[id] = true
@@ -572,7 +617,7 @@ func (v *aheadView) releaseETAs(now time.Time, entries []releaseEntry, g release
 				}
 			}
 		}
-		windows[i] = estimate.ReleaseWindow{Remaining: incRemaining, Created: incCreated, Floor: releaseFloor(floorGateIDs, gateLabelsByID)}
+		windows[i] = estimate.ReleaseWindow{Remaining: incRemaining, Created: incCreated, Floor: releaseFloor(floorGateIDs, gateLabelsByID), Pickups: pickups}
 	}
 	etas := estimate.ReleaseETA(now, releaseWindowHours, closedTotal, closedWithPR, windows)
 	return headerLines, etas, hasHumanGate, judge
@@ -827,7 +872,7 @@ func aheadGateWaitingSection(ctx context.Context, q domain.Querier, now time.Tim
 		if len(waitersByGate[e.ID]) == 0 {
 			continue
 		}
-		sec := gateSectionOf(e)
+		sec := waitlabel.GateSectionOf(e)
 		bySec[sec] = append(bySec[sec], e)
 		gateIDs = append(gateIDs, e.ID)
 	}

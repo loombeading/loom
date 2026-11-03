@@ -7,6 +7,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"time"
 )
 
 type EffectivePriority struct {
@@ -17,7 +18,9 @@ type EffectivePriority struct {
 const effBeadsCTE = `
 		eff_beads(id, status, created_at, priority) AS (
 			SELECT id, status, created_at,
-			       CASE WHEN expedite_until > ? AND status IN (?, ?) THEN 0 ELSE priority END
+			       CASE WHEN expedite_until > ? AND status IN (?, ?) THEN 0
+			            WHEN due_at IS NOT NULL AND due_at <= ? AND status IN (?, ?) THEN MIN(priority, 1)
+			            ELSE priority END
 			FROM beads
 		)`
 
@@ -36,50 +39,95 @@ const reachLenders = `
 		WHERE h.status NOT IN (?, ?) AND l.status NOT IN (?, ?)
 	)`
 
-func effBeadsArgs(now string) []any {
-	return []any{now, StatusOpen, StatusInProgress}
+func dueCutoff(ctx context.Context, q Querier, now string) (string, error) {
+	coef, err := LoadCoefficients(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	nowT, err := time.Parse(time.RFC3339Nano, now)
+	if err != nil {
+		return "", fmt.Errorf("due cutoff: now %q: %w", now, err)
+	}
+	return FormatTime(nowT.Add(coef.Duration("due_lead"))), nil
 }
 
-func reachLendersArgs(now, id string, extra ...any) []any {
-	return append(append(effBeadsArgs(now), id,
+func effBeadsArgs(now, dueBefore string) []any {
+	return []any{now, StatusOpen, StatusInProgress, dueBefore, StatusOpen, StatusInProgress}
+}
+
+func reachLendersArgs(now, dueBefore, id string, extra ...any) []any {
+	return append(append(effBeadsArgs(now, dueBefore), id,
 		BlocksDepType, StatusClosed, StatusCancelled, StatusClosed, StatusCancelled,
 		ParentChildDepType, StatusClosed, StatusCancelled, StatusClosed, StatusCancelled,
 	), extra...)
 }
 
-const SourceExpedite = "expedite"
+const (
+	SourceExpedite = "expedite"
+	SourceDue      = "due"
+)
 
 func RaisedPriorities(ctx context.Context, q Querier, now string) (map[string]EffectivePriority, error) {
 	now = nowOrDefault(now)
-	if _, err := LoadCoefficients(ctx, q); err != nil {
+	dueBefore, err := dueCutoff(ctx, q, now)
+	if err != nil {
 		return nil, err
 	}
 	rows, err := q.QueryContext(ctx, `
-		WITH RECURSIVE `+effBeadsCTE+`, lend(id, p) AS (
-			SELECT d.depends_on_id, l.priority FROM eff_beads l
+		WITH RECURSIVE expedited(id) AS MATERIALIZED (
+			SELECT id FROM beads WHERE expedite_until > ? AND status IN (?, ?)
+		), dued(id) AS MATERIALIZED (
+			SELECT id FROM beads WHERE due_at IS NOT NULL AND due_at <= ? AND status IN (?, ?)
+		), lend(id, p) AS (
+			SELECT d.depends_on_id, l.priority FROM beads l
 			CROSS JOIN dependencies d ON d.bead_id = l.id AND d.type = ? AND d.removed = 0
-			CROSS JOIN eff_beads h ON h.id = d.depends_on_id
+			CROSS JOIN beads h ON h.id = d.depends_on_id
 			WHERE l.status IN (?, ?) AND h.status IN (?, ?) AND l.priority < h.priority
 			UNION
-			SELECT d.bead_id, l.priority FROM eff_beads l
+			SELECT d.bead_id, l.priority FROM beads l
 			CROSS JOIN dependencies d ON d.depends_on_id = l.id AND d.type = ? AND d.removed = 0
-			CROSS JOIN eff_beads h ON h.id = d.bead_id
+			CROSS JOIN beads h ON h.id = d.bead_id
 			WHERE l.status IN (?, ?) AND h.status IN (?, ?) AND l.priority < h.priority
+			UNION
+			SELECT d.depends_on_id, 0 FROM expedited l
+			CROSS JOIN dependencies d ON d.bead_id = l.id AND d.type = ? AND d.removed = 0
+			CROSS JOIN beads h ON h.id = d.depends_on_id
+			WHERE h.status IN (?, ?)
+			UNION
+			SELECT d.bead_id, 0 FROM expedited l
+			CROSS JOIN dependencies d ON d.depends_on_id = l.id AND d.type = ? AND d.removed = 0
+			CROSS JOIN beads h ON h.id = d.bead_id
+			WHERE h.status IN (?, ?)
+			UNION
+			SELECT d.depends_on_id, 1 FROM dued l
+			CROSS JOIN dependencies d ON d.bead_id = l.id AND d.type = ? AND d.removed = 0
+			CROSS JOIN beads h ON h.id = d.depends_on_id
+			WHERE h.status IN (?, ?) AND 1 < h.priority
+			UNION
+			SELECT d.bead_id, 1 FROM dued l
+			CROSS JOIN dependencies d ON d.depends_on_id = l.id AND d.type = ? AND d.removed = 0
+			CROSS JOIN beads h ON h.id = d.bead_id
+			WHERE h.status IN (?, ?) AND 1 < h.priority
 			UNION
 			SELECT d.depends_on_id, lend.p FROM lend
 			CROSS JOIN dependencies d ON d.bead_id = lend.id AND d.type = ? AND d.removed = 0
-			CROSS JOIN eff_beads h ON h.id = d.depends_on_id
+			CROSS JOIN beads h ON h.id = d.depends_on_id
 			WHERE h.status IN (?, ?) AND lend.p < h.priority
 			UNION
 			SELECT d.bead_id, lend.p FROM lend
 			CROSS JOIN dependencies d ON d.depends_on_id = lend.id AND d.type = ? AND d.removed = 0
-			CROSS JOIN eff_beads h ON h.id = d.bead_id
+			CROSS JOIN beads h ON h.id = d.bead_id
 			WHERE h.status IN (?, ?) AND lend.p < h.priority
 		)
 		SELECT id, MIN(p) FROM lend GROUP BY id`,
 		now, StatusOpen, StatusInProgress,
+		dueBefore, StatusOpen, StatusInProgress,
 		BlocksDepType, StatusOpen, StatusInProgress, StatusOpen, StatusInProgress,
 		ParentChildDepType, StatusOpen, StatusInProgress, StatusOpen, StatusInProgress,
+		BlocksDepType, StatusOpen, StatusInProgress,
+		ParentChildDepType, StatusOpen, StatusInProgress,
+		BlocksDepType, StatusOpen, StatusInProgress,
+		ParentChildDepType, StatusOpen, StatusInProgress,
 		BlocksDepType, StatusOpen, StatusInProgress,
 		ParentChildDepType, StatusOpen, StatusInProgress)
 	if err != nil {
@@ -99,10 +147,33 @@ func RaisedPriorities(ctx context.Context, q Querier, now string) (map[string]Ef
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("raised priorities: iterate: %w", err)
 	}
+	if err := addOwnDues(ctx, q, dueBefore, out); err != nil {
+		return nil, err
+	}
 	if err := addOwnExpedites(ctx, q, now, out); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func addOwnDues(ctx context.Context, q Querier, dueBefore string, out map[string]EffectivePriority) error {
+	rows, err := q.QueryContext(ctx, `SELECT id FROM beads WHERE due_at IS NOT NULL AND due_at <= ? AND status IN (?, ?) AND priority > 1`,
+		dueBefore, StatusOpen, StatusInProgress)
+	if err != nil {
+		return fmt.Errorf("raised priorities: own dues: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("raised priorities: own dues: scan: %w", err)
+		}
+		if e, ok := out[id]; ok && e.Priority < 1 {
+			continue
+		}
+		out[id] = EffectivePriority{Priority: 1, Source: SourceDue}
+	}
+	return rows.Err()
 }
 
 func addOwnExpedites(ctx context.Context, q Querier, now string, out map[string]EffectivePriority) error {
@@ -124,6 +195,10 @@ func addOwnExpedites(ctx context.Context, q Querier, now string, out map[string]
 
 func FillSources(ctx context.Context, q Querier, now string, raised map[string]EffectivePriority, ids []string) error {
 	now = nowOrDefault(now)
+	dueBefore, err := dueCutoff(ctx, q, now)
+	if err != nil {
+		return err
+	}
 	for _, id := range ids {
 		e, ok := raised[id]
 		if !ok || e.Source != "" {
@@ -133,7 +208,7 @@ func FillSources(ctx context.Context, q Querier, now string, raised map[string]E
 			WITH RECURSIVE `+effBeadsCTE+`, `+reachLenders+`
 			SELECT i.id FROM reach JOIN eff_beads i ON i.id = reach.id
 			WHERE i.priority = ? ORDER BY i.created_at ASC, i.id ASC LIMIT 1`,
-			reachLendersArgs(now, id, e.Priority)...).Scan(&e.Source)
+			reachLendersArgs(now, dueBefore, id, e.Priority)...).Scan(&e.Source)
 		if err != nil {
 			return fmt.Errorf("effective priority source of %s: %w", id, err)
 		}
@@ -144,23 +219,30 @@ func FillSources(ctx context.Context, q Querier, now string, raised map[string]E
 
 func EffectivePriorityOf(ctx context.Context, q Querier, now, id string) (EffectivePriority, bool, error) {
 	now = nowOrDefault(now)
-	var own int
-	if err := q.QueryRowContext(ctx, `WITH `+effBeadsCTE+` SELECT priority FROM eff_beads WHERE id = ?`, append(effBeadsArgs(now), id)...).Scan(&own); err != nil {
+	dueBefore, err := dueCutoff(ctx, q, now)
+	if err != nil {
+		return EffectivePriority{}, false, err
+	}
+	var own, stored int
+	if err := q.QueryRowContext(ctx, `WITH `+effBeadsCTE+` SELECT e.priority, b.priority FROM eff_beads e JOIN beads b ON b.id = e.id WHERE e.id = ?`, append(effBeadsArgs(now, dueBefore), id)...).Scan(&own, &stored); err != nil {
 		return EffectivePriority{}, false, fmt.Errorf("effective priority of %s: %w", id, err)
 	}
 	if own == 0 {
 		return EffectivePriority{Priority: 0, Source: SourceExpedite}, true, nil
 	}
 	var e EffectivePriority
-	err := q.QueryRowContext(ctx, `
+	err = q.QueryRowContext(ctx, `
 		WITH RECURSIVE `+effBeadsCTE+`, `+reachLenders+`
 		SELECT i.id, i.priority FROM reach JOIN eff_beads i ON i.id = reach.id
 		ORDER BY i.priority ASC, i.created_at ASC, i.id ASC LIMIT 1`,
-		reachLendersArgs(now, id)...).Scan(&e.Source, &e.Priority)
+		reachLendersArgs(now, dueBefore, id)...).Scan(&e.Source, &e.Priority)
 	if err != nil {
 		return EffectivePriority{}, false, fmt.Errorf("effective priority of %s: %w", id, err)
 	}
 	if e.Priority >= own {
+		if own < stored {
+			return EffectivePriority{Priority: own, Source: SourceDue}, true, nil
+		}
 		return EffectivePriority{Priority: own}, false, nil
 	}
 	return e, true, nil
@@ -191,9 +273,21 @@ func effectiveOf(raised map[string]EffectivePriority, id string, stored int) int
 	return stored
 }
 
-func compareEffective(raised map[string]EffectivePriority, a, b Bead) int {
+func compareAdjusted(adj TimeAdjustment, a, b Bead) int {
+	return compareEffective(adj.Eff, adj.Demand, a, b)
+}
+
+func boolRank(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func compareEffective(raised map[string]EffectivePriority, demand map[string]bool, a, b Bead) int {
 	return cmp.Or(
 		cmp.Compare(effectiveOf(raised, a.ID, a.Priority), effectiveOf(raised, b.ID, b.Priority)),
+		cmp.Compare(boolRank(!demand[a.ID]), boolRank(!demand[b.ID])),
 		cmp.Compare(a.CreatedAt, b.CreatedAt),
 		cmp.Compare(a.ID, b.ID),
 	)

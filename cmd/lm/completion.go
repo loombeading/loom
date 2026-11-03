@@ -12,6 +12,16 @@ import (
 )
 
 func runCompletion(args []string, stdout, stderr io.Writer) int {
+	for _, a := range args {
+		if a == "--" {
+			break
+		}
+		if a == helpFlag || a == "-h" {
+			fmt.Fprintln(stderr, "Usage: lm completion zsh|bash")
+			fmt.Fprintln(stderr, "Print a shell completion script")
+			return 0
+		}
+	}
 	if len(args) != 1 {
 		output.WriteError(stderr, "lm completion requires exactly one shell (zsh, bash)")
 		return 1

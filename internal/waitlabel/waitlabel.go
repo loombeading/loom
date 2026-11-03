@@ -38,8 +38,22 @@ const (
 	SchemaVersion Kind = "schema-version"
 	URL           Kind = "url"
 	HarnessCheck  Kind = "harness-check"
+	LimitHits     Kind = "limit-hits"
+	ReserveKept   Kind = "reserve-kept"
+	ClosesUnder   Kind = "closes-under"
+	Merged        Kind = "merged"
+	DupRate       Kind = "dup-rate"
+	Ahead         Kind = "ahead"
+
+	ReleaseFile Kind = "release-file"
+	Coefficient Kind = "coefficient"
+	Proposal    Kind = "proposal"
 
 	RunnersOnline Kind = "runners-online"
+
+	PublicReviewFindings Kind = "publicreview-findings"
+	Coverage             Kind = "coverage"
+	SpecRulesUntested    Kind = "spec-rules-untested"
 )
 
 func (k Kind) Prefix() string { return Prefix + string(k) + ":" }
@@ -50,7 +64,10 @@ var probeKinds = map[Kind]bool{
 	Tier: false, PRMerged: true, RepoVisibility: true,
 	RepoAbsent: true, GitHub: false,
 	Tag: false, SLI: false, PublicPath: false, PublicReview: false, PublicCheck: false,
-	SchemaVersion: false, URL: false, HarnessCheck: false,
+	SchemaVersion: false, URL: false, HarnessCheck: false, LimitHits: false, ReserveKept: false, ClosesUnder: false,
+	Merged: false, DupRate: false, Ahead: false,
+	ReleaseFile: false, Coefficient: false, Proposal: false,
+	PublicReviewFindings: false, Coverage: false, SpecRulesUntested: false,
 }
 
 var Kinds = slices.Sorted(maps.Keys(probeKinds))

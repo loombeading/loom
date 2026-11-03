@@ -13,7 +13,8 @@ func TestKindLabel(t *testing.T) {
 		t.Errorf("PRMerged.Prefix() = %q", got)
 	}
 	consts := []Kind{Disk, Date, File, CIGreen, Runs, Proofs, Log, PRMerged, After, Closes, Tier, RepoVisibility, RepoAbsent, GitHub,
-		"tag", "sli", "public-path", "public-review", "public-check", "schema-version", "url", "harness-check"}
+		"tag", "sli", "public-path", "public-review", "public-check", "schema-version", "url", "harness-check", "limit-hits", "reserve-kept", "closes-under", "merged", "dup-rate", "ahead", "release-file", "coefficient", "proposal",
+		"publicreview-findings", "coverage", "spec-rules-untested"}
 	got := Kinds
 	want := slices.Sorted(slices.Values(consts))
 	if !slices.Equal(got, want) {

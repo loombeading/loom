@@ -178,7 +178,7 @@ func TestClaimClearedByReleaseReopenCancel(t *testing.T) {
 	}
 }
 
-func TestClaimExpiredListFilterAndRetryCount(t *testing.T) {
+func TestClaimExpiredListFilter(t *testing.T) {
 	db := testDB(t)
 	expired := createForUpdate(t, db)
 	live := createForUpdate(t, db)
@@ -192,13 +192,6 @@ func TestClaimExpiredListFilterAndRetryCount(t *testing.T) {
 	mustNoErr(t, err)
 	if len(beads) != 1 || beads[0].ID != expired {
 		t.Fatalf("expired beads = %+v, want only %s", beads, expired)
-	}
-
-	mustNoErr(t, claimWithClaim(t, db, expired, "bob", claimT0.Add(time.Hour), 0))
-	m, err := DerivedMetrics(context.Background(), db, []string{expired})
-	mustNoErr(t, err)
-	if m[expired].RetryCount != 1 {
-		t.Fatalf("retry_count = %d, want 1 (claim_takeover)", m[expired].RetryCount)
 	}
 }
 

@@ -156,20 +156,22 @@ func runUpdate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	exit := 0
 	newlyReadyIDs := map[string]bool{}
+	showNewly := false
 	for _, raw := range fs.Args() {
-		newly, code, fatal := updateOne(ctx, db, stdout, stderr, raw, base, partialTitle, n)
+		newly, heldOn, code, fatal := updateOne(ctx, db, stdout, stderr, raw, base, partialTitle, n)
 		if fatal {
 			return 1
 		}
 		if code != 0 {
 			exit = code
 		}
+		showNewly = showNewly || heldOn
 		for _, nid := range newly {
 			newlyReadyIDs[nid] = true
 		}
 	}
 
-	if base.Cancel {
+	if base.Cancel || showNewly {
 		if err := writeNewlyReady(ctx, db.SQL, stdout, n, newlyReadyIDs, cfg.NamespaceDefault); err != nil {
 			output.WriteError(stderr, err.Error())
 			return 1
@@ -256,20 +258,27 @@ func partialFlagError(fieldSet map[string]bool, partial string, refs []string) s
 	return ""
 }
 
-func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, raw string, base domain.UpdateInput, partialTitle string, n domain.ShortIDs) ([]string, int, bool) {
+func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, raw string, base domain.UpdateInput, partialTitle string, n domain.ShortIDs) ([]string, bool, int, bool) {
 	id, err := domain.ResolveID(ctx, db.SQL, raw)
 	if err != nil {
 		output.WriteRejected(stdout, raw, err.Error())
-		return nil, 1, false
+		return nil, false, 1, false
 	}
 	in := base
 	in.ID = id
 
 	var namespace, partialID string
 	var warnings, newly []string
+	var heldOn bool
+	var autoResolved []idAndNamespace
 	doUpdate := func(tx *sql.Tx) error {
 		var err error
-		warnings, err = domain.UpdateBead(ctx, tx, in)
+		var resolvedIDs []string
+		warnings, resolvedIDs, err = domain.UpdateBeadAutoResolve(ctx, tx, in)
+		if err != nil {
+			return err
+		}
+		autoResolved, err = withNamespaces(ctx, tx, resolvedIDs)
 		if err != nil {
 			return err
 		}
@@ -292,24 +301,31 @@ func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, ra
 		if perr != nil {
 			return perr
 		}
-		if !in.Cancel {
-			return doUpdate(tx)
+		run := func() error { return doUpdate(tx) }
+		if in.Severity != nil || in.Due != nil || in.ExpediteFor != nil {
+			write := run
+			run = func() error {
+				released, on, herr := domain.HeldReleased(ctx, tx, effNow(), []string{id}, write)
+				newly, heldOn = append(newly, released...), on
+				return herr
+			}
 		}
-		var derr error
-		newly, derr = domain.NewlyReadyDiff(ctx, tx, func() error {
-			return doUpdate(tx)
-		})
+		if !in.Cancel {
+			return run()
+		}
+		cancelled, derr := domain.NewlyReadyDiff(ctx, tx, run)
+		newly = append(newly, cancelled...)
 		return derr
 	})
 	if err != nil {
 		switch {
 		case reportIfBusy(stderr, db.BusyTimeoutMS, err):
-			return nil, 1, true
+			return nil, false, 1, true
 		case reportIfReadOnly(stderr, raw, err), reportIfGateTerminal(stderr, raw, err):
 		default:
 			writeRejected(stdout, stderr, raw, err)
 		}
-		return nil, 1, false
+		return nil, false, 1, false
 	}
 	newNamespace := namespace
 	if in.Namespace != "" {
@@ -320,6 +336,9 @@ func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, ra
 	} else {
 		fmt.Fprintf(stdout, "- Updated: %s\n", output.EscapeInline(domain.DisplayID(newNamespace, id, n)))
 	}
+	for _, g := range autoResolved {
+		fmt.Fprintf(stdout, "- Auto-resolved: %s\n", output.EscapeInline(domain.DisplayID(g.Namespace, g.ID, n)))
+	}
 	for _, w := range warnings {
 		fmt.Fprintf(stderr, "warning: %s: %s\n", output.EscapeInline(domain.DisplayID(newNamespace, id, n)), output.EscapeInline(w))
 	}
@@ -327,9 +346,9 @@ func updateOne(ctx context.Context, db *storage.DB, stdout, stderr io.Writer, ra
 		partialNamespace, nerr := namespaceOf(ctx, db.SQL, partialID)
 		if nerr != nil {
 			output.WriteError(stderr, nerr.Error())
-			return nil, 1, true
+			return nil, false, 1, true
 		}
 		fmt.Fprintf(stdout, "- Created: %s\n", output.EscapeInline(domain.DisplayID(partialNamespace, partialID, n)))
 	}
-	return newly, 0, false
+	return newly, heldOn, 0, false
 }

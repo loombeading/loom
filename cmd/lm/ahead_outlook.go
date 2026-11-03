@@ -39,7 +39,7 @@ func (v *aheadView) outlookInput(now time.Time, raised map[string]domain.Effecti
 	stage := func(p int) int { return min(max(p, 0), outlookStages-1) }
 
 	windowStart := now.Add(-releaseWindowHours * time.Hour)
-	in.closed, _ = closeVelocityCounts(v.throughput, now, releaseWindowHours)
+	in.closed, _ = closeVelocityCounts(v.throughput, now)
 	for _, tb := range v.throughput {
 		if !tb.CreatedAt.After(windowStart) || tb.CreatedAt.After(now) {
 			continue

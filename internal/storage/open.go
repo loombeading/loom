@@ -35,6 +35,8 @@ type OpenOptions struct {
 	Actor string
 
 	AllowCreate bool
+
+	SkipSchemaCheck bool
 }
 
 type DB struct {
@@ -96,9 +98,11 @@ func Open(ctx context.Context, dir string, opts OpenOptions) (*DB, error) {
 	}
 	sqlDB.SetMaxOpenConns(1)
 
-	if err := ensureSchema(ctx, sqlDB, readOnly); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
+	if !opts.SkipSchemaCheck {
+		if err := ensureSchema(ctx, sqlDB, readOnly); err != nil {
+			_ = sqlDB.Close()
+			return nil, err
+		}
 	}
 
 	return &DB{SQL: sqlDB, ReadOnly: readOnly, Mode: mode, BusyTimeoutMS: busyTimeoutMS}, nil

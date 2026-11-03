@@ -8,11 +8,11 @@ Loom は、AI コーディングエージェントが自分でタスクを取っ
 
 - [Bead](docs/glossary.md#bead): Loom が管理する作業・タスク・Gate・Epic の最小単位です。
 - [依存](docs/glossary.md#依存): Bead 同士の先行・後行関係（blocks / parent-child）を表す有向リンクです。
-- [Ready](docs/glossary.md#ready): 未着手（`open`）でブロッカーが無く、今すぐ着手できる Bead の状態です。
+- [Ready](docs/glossary.md#ready): 未着手（`open`）でブロッカーが無く、終端でない子も持たず、今すぐ着手できる Bead の状態です。
 - [Gate](docs/glossary.md#gate): 自動進行を止め、人の承認や外部条件の成立を待つための特別な Bead です。
-- [実行者](docs/glossary.md#実行者): cron や CI のスケジュール実行のように、決まった間隔で起動し直され、止まっても次の起動で作業を再開できる仕組みの上で、Bead を claim して作業を進めるエージェントです。実行者は Loom 本体には含まれず、利用者が用意します。自作するときの最小要件は [docs/glossary.md](docs/glossary.md#実行者) の「実行者」にまとめてあります。用意しないときの運用は [docs/tutorial.md](docs/tutorial.md#実行者を用意しないとき) の「実行者を用意しないとき」にあります。
+- [実行者](docs/glossary.md#実行者): cron や CI のスケジュール実行のように、決まった間隔で起動し直され、止まっても次の起動で作業を再開できる仕組みの上で、Bead を claim して（自分の担当として取って）作業を進めるエージェントです。実行者は Loom 本体には含まれず、利用者が用意します。自作するときの最小要件は [docs/glossary.md](docs/glossary.md#実行者) の「実行者」にまとめてあります。用意しないときの運用は [docs/tutorial.md](docs/tutorial.md#実行者を用意しないとき) の「実行者を用意しないとき」にあります。
 
-その他の用語（claim, close, Newly ready, Gate の持ち主, 孤児 Gate, Epic, マイルストーン, course, wip, Compaction, namespace, token cost, rework, external-ref, --severity, --due, --expedite, 推論の深さ, redetect_key, revived_at, 係数, 設定時刻, 対話セッション, 受入, 判定者, 引き継ぎ簿, watcher, probe, statusline）は [docs/glossary.md](docs/glossary.md) を参照してください。
+その他の用語（claim, close, Newly ready, Gate の節, Gate の持ち主, 孤児 Gate, Epic, マイルストーン, course, wip, Compaction, namespace, token cost, rework, external-ref, --severity, --due, --expedite, 推論の深さ, redetect_key, revived_at, 係数, 時間調整, 設定時刻, 対話セッション, 受入, 判定者, 引き継ぎ簿, watcher, probe, statusline）は [docs/glossary.md](docs/glossary.md) を参照してください。
 
 ## インストール
 
@@ -21,8 +21,6 @@ Loom は、AI コーディングエージェントが自分でタスクを取っ
 リリースした版は [Releases](https://github.com/loombeading/loom/releases) に載っています。検証付きで導入するには、版を固定した (b) の `go install`（取得したソースを Go のチェックサムデータベースで照合します）か、版を指定した (c) の `install.sh --release <版>`（SHA-256 と attestation の両方を検証します）を使ってください。(d) はソースを変更して確かめる開発者向けです。
 
 ### (a) Homebrew
-
-formula の実体 `Formula/lm.rb` は、各版のリリース時にその版のチェックサムから生成してリポジトリの木に入れます。
 
 macOS と Linux の Homebrew でこのリポジトリを tap として追加して入れます。formula は (c) と同じ Release のバイナリを、版ごとに固定した SHA-256 で照合してから配置します。
 
@@ -35,29 +33,31 @@ brew install loombeading/loom/lm
 
 ### (b) `go install`（clone せずにリリースのタグからビルド）
 
-Go が入っていれば、これがいちばん手早い方法です。リポジトリを clone せず、Go のモジュールプロキシからタグの版のソースを取ってビルドします。取得したソースは Go のチェックサムデータベース（`sum.golang.org`）の記録と照合され、一致しなければビルドせずに止まります。
+Go 1.27 以降が入っていれば、これがいちばん手早い方法です（`go.mod` が `go 1.27` を指定しているので、それより古い Go ではビルドできません）。リポジトリを clone せず、Go のモジュールプロキシからタグの版のソースを取ってビルドします。取得したソースは Go のチェックサムデータベース（`sum.golang.org`）の記録と照合され、一致しなければビルドせずに止まります。
 
 ```sh
-# 版を固定して入れる（tag は Releases ページに載っている版のタグに置き換える）
-go install github.com/loombeading/loom/cmd/lm@v0.YYMM.N
+# 版を固定して入れる（v0.2610.1 は Releases ページに載っている版のタグに置き換える）
+go install github.com/loombeading/loom/cmd/lm@v0.2610.1
 ```
 
-タグは CalVer（`v0.YYMM.N`）で、メジャー版を 0 に固定しているので、`@latest` を指定すると最新リリースが入ります。版を固定すると、どの版を入れたかがコマンドに残り、読んだリリースノートと入る版が一致します。`lm version` の `<版>` は Release のバイナリと同じタグになります。モジュールのソースには git の情報が含まれないので、`<コミット>` と `<日付>` は Release のバイナリと同じく `-` と表示されます。
+タグは年月を版番号にした CalVer（Calendar Versioning・暦日版番号）の `v0.<年2桁><月2桁>.<その月の通番>` で、通番は 0 から数えます（例: 2026 年 10 月の 2 番目の版は `v0.2610.1`）。メジャー版を 0 に固定しているので、`@latest` を指定すると最新リリースが入ります。版を固定すると、どの版を入れたかがコマンドに残り、読んだリリースノートと入る版が一致します。`lm version` に出る値は「導入確認」にまとめてあります。
 
 ### (c) GitHub Release から取得して検証する
 
 Release にはバイナリと SHA-256 のチェックサム一覧、Sigstore keyless 署名（GitHub artifact attestation）が同梱されています。ダウンロードしたら、チェックサムと attestation の両方を確かめてから配置してください。
 
-repo 根の `install.sh` がこの手順をまとめて行います。`curl`・`gh`（GitHub CLI）・`sha256sum` か `shasum` が要り、macOS と Linux で動きます。どちらかの検証に失敗すると何も書かずに終了コード 1 で止まります。
+repo 根の `install.sh` がこの手順をまとめて行い、macOS と Linux で動きます。Release を取得するとき（`--release` か引数なし）は `curl`・`gh`（GitHub CLI）・`sha256sum` か `shasum` が要り、`gh` は attestation の検証で GitHub API に問い合わせるので、先に `gh auth login` で認証しておいてください。どちらかの検証に失敗すると何も書かずに終了コード 1 で止まります。ソースからビルドするとき（`--source`）は Go 1.27 以降だけが要り、`curl`・`gh`・チェックサムのコマンドは使いません。
 
 `install.sh` は Release のアセットには含まれないので、リポジトリから取得します。clone するか、使う版のタグを指定して `install.sh` だけを取得してください。どちらも、実行する前に中身を読んでください。
 
 ```sh
-# リポジトリを clone して repo 根で実行する
+# どちらの経路でも、先に使う版のタグを決める
+tag=v0.2610.1  # Releases ページに載っている版のタグに置き換える
+# リポジトリを clone し、タグを checkout して repo 根で実行する
 git clone https://github.com/loombeading/loom.git
 cd loom
+git checkout "$tag"
 # または、タグを指定して install.sh だけを取得する（版を固定すると、読んだ中身と実行する中身が一致する）
-tag=v0.YYMM.N  # Releases ページに載っている版のタグに置き換える
 curl -fsSLO "https://raw.githubusercontent.com/loombeading/loom/${tag}/install.sh"
 ```
 
@@ -83,10 +83,11 @@ bash install.sh --source
 | Linux | amd64（x86_64） | `lm_linux_amd64` |
 | Linux | arm64（aarch64） | `lm_linux_arm64` |
 
-下の例は `uname` から自分の環境のアセット名を組み立てます。
+下の例は `uname` から自分の環境のアセット名を組み立て、`$tag` に決めた版を取得します。`install.sh --release "$tag"` と同じ版が入ります。
 
 ```sh
-# 0. 自分の環境のアセット名を決める
+# 0. 版のタグと自分の環境のアセット名を決める
+tag=v0.2610.1  # Releases ページに載っている版のタグに置き換える
 os=$(uname -s | tr '[:upper:]' '[:lower:]')        # darwin / linux
 case "$(uname -m)" in
   x86_64 | amd64) arch=amd64 ;;
@@ -94,14 +95,14 @@ case "$(uname -m)" in
 esac
 asset="lm_${os}_${arch}"
 
-# 1. バイナリとチェックサム一覧を取得する
-curl -LO "https://github.com/loombeading/loom/releases/latest/download/${asset}"
-curl -LO https://github.com/loombeading/loom/releases/latest/download/SHA256SUMS
+# 1. バイナリとチェックサム一覧を取得する（-f で、取得に失敗したら HTML を保存せずに止まる）
+curl -fLO "https://github.com/loombeading/loom/releases/download/${tag}/${asset}"
+curl -fLO "https://github.com/loombeading/loom/releases/download/${tag}/SHA256SUMS"
 
 # 2. チェックサムを照合する（不一致なら中断。Linux では sha256sum -c SHA256SUMS --ignore-missing でもよい）
 shasum -a 256 -c SHA256SUMS --ignore-missing
 
-# 3. Sigstore の attestation を検証する（gh: GitHub CLI）
+# 3. Sigstore の attestation を検証する（gh: GitHub CLI。GitHub API に問い合わせるので、先に gh auth login で認証しておく）
 gh attestation verify "$asset" --repo loombeading/loom
 
 # 4. 検証を通ったら配置する（~/bin が無ければ作る。~/bin を PATH に入れておく）
@@ -112,7 +113,7 @@ mv "$asset" "$HOME/bin/lm"
 
 ### (d) clone したリポジトリからビルド
 
-リポジトリを clone し、その根で次を実行します。
+Go 1.27 以降を入れたうえで、リポジトリを clone し、その根で次を実行します。
 
 ```sh
 git clone https://github.com/loombeading/loom.git
@@ -120,7 +121,7 @@ cd loom
 go install ./cmd/lm
 ```
 
-`$GOBIN`（未設定なら `$GOPATH/bin`）にビルドして配置します。`lm version` の `<版>` は直近のタグから Go が作る擬似版（作業木に変更があれば末尾に `+dirty`）になり、`<コミット>` と `<日付>` には checkout しているコミットが入ります。
+`$GOBIN`（未設定なら `$GOPATH/bin`）にビルドして配置します。`lm version` に出る値は「導入確認」にまとめてあります。
 
 ソースを変更して確かめる開発者向けの手順は、導入とは別に次のとおりです（Release と同じく cgo を使わずにビルドし、全テストを走らせます）。テストは時刻を `LM_NOW` で固定するので、ビルドタグ `lmtestclock` を付けて走らせます。このタグの無いバイナリ（Release を含む）は `LM_NOW` を読みません。
 
@@ -131,36 +132,50 @@ go test -tags lmtestclock ./...
 
 ### 導入確認
 
+`lm version` は `lm <版> (<コミット> <日付>)` の形で 1 行を出します。下は (a)〜(c) で `v0.2610.1` を入れたときの出力です。
+
 ```sh
 $ lm version
-lm v0.YYMM.N (- -)
+lm v0.2610.1 (- -)
 ```
 
-括弧の中はビルド元のコミット（先頭 9 桁）とその日付で、版とともに導入したものに応じて変わります。(b) の `go install` と (a)・(c) の Release のバイナリはコミットの情報を埋め込まないので、どれも `-` になります。コミットは版のタグから辿れます。(d) の clone したリポジトリからのビルドでは、checkout しているコミットとその日付が入ります（例: `(6ebd72c31 2026-10-01)`）。
+`<コミット>` はビルド元のコミットの先頭 9 桁、`<日付>` はその日付です。経路ごとに出る値は次のとおりです。
+
+| 経路 | `<版>` | `<コミット>` と `<日付>` |
+|---|---|---|
+| (a) Homebrew・(c) Release のバイナリ | 入れた版のタグ（例: `v0.2610.1`） | どちらも `-`（コミットは版のタグから辿れます） |
+| (b) `go install …@<版>` | 指定した版のタグ（例: `v0.2610.1`） | どちらも `-`（モジュールのソースには git の情報が含まれません） |
+| (d) clone したリポジトリからのビルド | 直近のタグから Go が作る擬似版。checkout した中身に commit していない変更があれば末尾に `+dirty` が付きます | checkout しているコミットのハッシュの先頭 9 桁とその日付 |
 
 ### 版を上げたとき
 
-`lm` の新しい版は、既存の `loom.db` のスキーマ（表の構造）を新しい形に移す必要があることがあります。DB のスキーマ版がその版の期待より古いと、`lm` は DB を開いた時点で `database schema is older than this build of lm supports; run "lm migrate"` というエラーで止まります。版を上げたら、使い始める前に次の 2 つを実行します。
+`lm` の新しい版は、既存の `loom.db` のスキーマ（表の構造）を新しい形に移す必要があることがあります。DB のスキーマ版がその版の期待より古いと、`lm` は DB を開いた時点で次のエラーを出し、終了コード 1 で止まります。`lm where` も DB を開くので、DB が古いあいだは同じエラーで止まります。
+
+```text
+Error: database schema is older than this build of lm supports; run "lm migrate" instead of lm export/import (which drops audit_log and rewrites history)
+```
+
+版を上げたら、使い始める前に `lm migrate` を実行し、`lm where` で移行後の状態を確かめます。
 
 ```sh
+$ lm migrate
+- Schema: <N> (already current)
 $ lm where
 - Database: /tmp/tut/.loom/loom.db
 - Resolved via: LM_DIR
 - Config: /home/you/.config/loom/config.json (not found)
-- Schema: 17 (binary expects 17)
-$ lm migrate
-- Schema: 17 (already current)
+- Schema: <N> (binary expects <N>)
 ```
 
-`lm where` は使っているデータベースの場所と、`Schema:` 行に DB のスキーマ版とバイナリが期待する版を出します。2 つの数が違うときは `lm migrate` で DB のスキーマをバイナリの期待する版まで進めます。`lm export`・`lm import` での作り直しは監査ログ（変更履歴）を失うので、移行には使いません。
+`<N>` はスキーマ版の整数で、入れた `lm` の版によって変わります。`lm migrate` は DB のスキーマをバイナリの期待する版まで進め、すでに揃っていれば `already current` と出して何もしません。`lm where` は使っているデータベースの場所と、`Schema:` 行に DB のスキーマ版とバイナリが期待する版を出します。`lm export`・`lm import` での作り直しは監査ログ（変更履歴）を失うので、移行には使いません。
 
 ## 5 分で使う
 
-リポジトリで `lm` を使い始め、タスクを 1 件作って着手し、閉じるまでの流れです。下の出力は、一時ディレクトリ `/tmp/tut` で実行した実際の出力です。
+リポジトリで `lm` を使い始め、タスクを 1 件作って着手し、閉じるまでの流れです。下の出力は、一時ディレクトリ `/tmp/tut` で実行した実際の出力です。この手順は[実行者](docs/glossary.md#実行者)を用意しなくても完結し、claim から close までを利用者が `lm` を直接打って進めます。エージェントに任せるときは、claim は実行者だけが持ち、対話セッションのエージェントは claim しないのが既定です。エージェントが 1 つだけの運用などで対話セッションのエージェントに claim させる場合は、セッションを閉じる前に `lm update <id> --release` で返すか `lm close` で閉じます（[チュートリアル](docs/tutorial.md)「実行者を用意しないとき」）。
 
-`lm init` は `LM_DIR` が指す場所にデータベースを作ります（`LM_DIR` が未設定のときの置き場所は次の段落）。`@alice` は claim した主体の名前で、`LM_ACTOR` から取ります（コマンドごとに `--actor` で上書きできます）。
+`lm init` は `LM_DIR` が指す場所にデータベースを作ります（`LM_DIR` が未設定のときの置き場所は次の段落）。claim は Ready な Bead を自分の担当として取り、`in_progress` にする操作で、`lm ready --claim` は Ready の先頭の 1 件を claim します。`@alice` は claim した主体の名前で、`LM_ACTOR` から取ります（コマンドごとに `--actor` で上書きできます）。Bead の ID は環境ごとに別の値になり、既定では `id-` の後ろが 4 文字です（桁数は設定 `id.short_len` で決まります。[skills/loom/docs/env.md](skills/loom/docs/env.md)）。手順を写すときは、`lm close` などに渡す ID を自分の出力に出た ID に置き換えてください。
 
-`lm` はデータベース（`loom.db`）をデータディレクトリに置きます。環境変数 `LM_DIR` はそのデータディレクトリの場所で、絶対パスで指定します（例: `LM_DIR=/tmp/tut/.loom`。相対パスはエラーになります）。`LM_DIR` が未設定のときは `$XDG_DATA_HOME/loom`（`XDG_DATA_HOME` も未設定なら `~/.local/share/loom`）を使い、カレントディレクトリや親ディレクトリの `.loom` は見ません。解決先に `loom.db` が無ければ `lm init` 以外のコマンドはエラーになります。今どこを使っているかは `lm where` で確かめられます。詳しくは [skills/loom/docs/env.md](skills/loom/docs/env.md)（[GitHub 上の版](https://github.com/loombeading/loom/blob/main/skills/loom/docs/env.md)）を参照してください。
+`lm` はデータベース（`loom.db`）をデータディレクトリに置きます。環境変数 `LM_DIR` はそのデータディレクトリの場所で、絶対パスで指定します（例: `LM_DIR=/tmp/tut/.loom`。相対パスはエラーになります）。`LM_DIR` が未設定のときは `$XDG_DATA_HOME/loom`（`XDG_DATA_HOME` が未設定か相対パスなら `~/.local/share/loom`）を使い、カレントディレクトリや親ディレクトリの `.loom` は見ません。解決先に `loom.db` が無ければ `lm init` 以外のコマンドはエラーになります。今どこを使っているかは `lm where` で確かめられます。詳しくは [skills/loom/docs/env.md](skills/loom/docs/env.md)（[GitHub 上の版](https://github.com/loombeading/loom/blob/main/skills/loom/docs/env.md)）を参照してください。
 
 ```
 $ export LM_DIR=/tmp/tut/.loom LM_ACTOR=alice
@@ -169,21 +184,41 @@ $ lm init
 - Database: /tmp/tut/.loom/loom.db
 
 $ lm create --title "認証まわりのバグ修正" --priority 1
-- Created: id-8a5 [open/P1] 認証まわりのバグ修正
+- Created: id-8a5u [open/P1] 認証まわりのバグ修正
 
 $ lm ready --claim
-Claimed: id-8a5
-- id-8a5 [in_progress/P1] 認証まわりのバグ修正  @alice
+Claimed: id-8a5u
+- id-8a5u [in_progress/P1] 認証まわりのバグ修正  @alice
 
-$ lm close id-8a5 --reason "修正して確認済み"
-- Closed: id-8a5
+$ lm close id-8a5u --reason "修正して確認済み"
+- Closed: id-8a5u
 ## Newly ready
 (none)
 ```
 
-Bead の行の角括弧は `[type/status/P<n>]` の順に並びます。type は既定の `task` のときだけ省いて `[status/P<n>]` になり（`[open/P1]` は task の Bead）、`--external-ref` に PR の URL があると status の位置に `#<PR 番号>` が出ます。
+Bead の行の角括弧は `[type/status/P<n>]` の順に並びます。type は既定の `task` のときだけ省いて `[status/P<n>]` になり（`[open/P1]` は task の Bead）、`--external-ref` に PR の URL があると、未完了のときは status の位置に `#<PR 番号>` が出て（`[#42/P1]`）、closed・cancelled のあとは `[closed/#42/P1]` のように状態と並記されます。
 
 `lm close` は、閉じたことで新たに Ready になった Bead を `## Newly ready` に出します。`--summary`（要約）と `--reason`（理由）はどちらも任意です。`--summary` を付けると、閉じたあとの `lm show` で本文の代わりに要約が出ます（[docs/glossary.md](docs/glossary.md) の close）。Gate で人の判断を仰ぐ、眠る前に確認する、仕事を積むといった続きは [docs/tutorial.md](docs/tutorial.md) を参照してください。
+
+## 主なコマンド
+
+| コマンド | すること |
+|---|---|
+| `lm init` | データベースを作る |
+| `lm where` | 使っているデータベースの場所とスキーマ版を出す |
+| `lm create` | Bead を作る |
+| `lm ready` | 着手できる Bead を並べる（`--claim` で先頭を claim する） |
+| `lm show` / `lm list` / `lm search` | Bead を 1 件表示する / 一覧する / 語で探す |
+| `lm update` | Bead の状態・属性・ラベルを変える |
+| `lm close` | Bead を閉じ、新たに Ready になった Bead を出す |
+| `lm dep add` / `lm dep remove` | Bead 同士の依存を張る / 外す |
+| `lm blocked` | Ready でない Bead と、それを塞いでいるものを出す |
+| `lm gate` | Gate を一覧し、`create`・`resolve`・`reject` で作る・開く・却下する |
+| `lm ahead` | Ready の Bead とその先の見積もりトークン量を出す |
+| `lm export` / `lm import` | 全 Bead を JSONL に書き出す / JSONL を取り込む |
+| `lm migrate` | データベースのスキーマをバイナリの期待する版へ進める |
+
+ここに無いコマンドとフラグは次の `lm help` で確かめられます。
 
 ## ヘルプと補完
 

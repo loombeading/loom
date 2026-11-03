@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +22,8 @@ import (
 	"github.com/loombeading/loom/internal/storage"
 	"github.com/loombeading/loom/internal/xdg"
 )
+
+const shortCommitLen = 9
 
 var version = "dev"
 
@@ -50,8 +53,8 @@ func resolveVCS() (string, string) {
 		switch s.Key {
 		case "vcs.revision":
 			if v := s.Value; v != "" {
-				if len(v) > 9 {
-					v = v[:9]
+				if len(v) > shortCommitLen {
+					v = v[:shortCommitLen]
 				}
 				commit = v
 			}
@@ -174,6 +177,16 @@ func runWhere(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	db, err := openDBAt(dir, os.Getenv, "", cfg)
+	var mismatch error
+	if errors.Is(err, storage.ErrSchemaTooNew) || errors.Is(err, storage.ErrSchemaTooOld) {
+		mismatch = err
+		db, err = storage.Open(context.Background(), dir, storage.OpenOptions{
+			Env:             os.Getenv,
+			Actor:           actor("", os.Getenv),
+			BusyTimeoutMS:   cfg.BusyTimeoutMSOr(storage.DefaultBusyTimeoutMS),
+			SkipSchemaCheck: true,
+		})
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "Error: %s\n", err)
 		return 1
@@ -196,6 +209,10 @@ func runWhere(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "- Schema: %d (binary expects %d)\n", dbVersion, storage.SchemaVersion)
+	if mismatch != nil {
+		fmt.Fprintf(stderr, "Error: %s\n", mismatch)
+		return 1
+	}
 	return 0
 }
 

@@ -186,20 +186,7 @@ func candidateGatesForBead(ctx context.Context, tx *sql.Tx, id string) ([]string
 	if err != nil {
 		return nil, fmt.Errorf("candidate gates for bead: query: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []string
-	for rows.Next() {
-		var gateID string
-		if err := rows.Scan(&gateID); err != nil {
-			return nil, fmt.Errorf("candidate gates for bead: scan: %w", err)
-		}
-		out = append(out, gateID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("candidate gates for bead: iterate: %w", err)
-	}
-	return out, nil
+	return collectRows(rows, scanString)
 }
 
 type GateSweepResult struct {

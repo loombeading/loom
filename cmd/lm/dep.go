@@ -111,6 +111,9 @@ func runDepChange(sub, verb string, op func(ctx context.Context, tx *sql.Tx, act
 		return 1
 	}
 	defer func() { _ = db.Close() }()
+	if sub == "remove" && cfg.RequireMilestone() {
+		op = domain.RemoveLinkRequiringMilestone
+	}
 
 	ctx := domain.WithStaleIDNotice(context.Background(), stderr)
 	now := storage.NowRFC3339Milli()
@@ -125,7 +128,7 @@ func runDepChange(sub, verb string, op func(ctx context.Context, tx *sql.Tx, act
 	var beadID, dependsOnID, beadNamespace, dependsNamespace string
 	var changes []string
 	var raises bool
-	var blocked bytes.Buffer
+	var blocked, ready bytes.Buffer
 	err = db.WithWrite(ctx, func(tx *sql.Tx) error {
 		var rerr error
 		beadID, rerr = domain.ResolveID(ctx, tx, beadRaw)
@@ -151,13 +154,27 @@ func runDepChange(sub, verb string, op func(ctx context.Context, tx *sql.Tx, act
 		}
 		apply := func() error { return op(ctx, tx, actorVal, beadID, dependsOnID, depType, now, reasonVal) }
 		var dropped map[string]bool
+		var released []string
+		var heldOn bool
 		if rerr == nil && track && sub == cmdAdd {
-			dropped, rerr = droppedFromReady(ctx, tx, apply)
+			inner := apply
+			if !f.dryRun {
+				inner = func() error {
+					var herr error
+					released, heldOn, herr = domain.HeldReleased(ctx, tx, effNow(), []string{beadID, dependsOnID}, apply)
+					return herr
+				}
+			}
+			dropped, rerr = droppedFromReady(ctx, tx, inner)
 		} else if rerr == nil {
 			rerr = apply()
 		}
 		if rerr == nil && track {
 			changes, raises, rerr = priorityChanges(ctx, tx, before, n)
+		}
+		if rerr == nil && heldOn {
+			fmt.Fprintln(&ready)
+			rerr = writeNewlyReady(ctx, tx, &ready, n, idSet(released), cfg.NamespaceDefault)
 		}
 		if rerr == nil && len(dropped) > 0 {
 			rerr = writeNewlyBlocked(ctx, tx, &blocked, n, dropped, cfg.NamespaceDefault)
@@ -199,6 +216,7 @@ func runDepChange(sub, verb string, op func(ctx context.Context, tx *sql.Tx, act
 	fmt.Fprintf(stdout, "- %s: %s %s %s (%s)\n",
 		verb, output.EscapeInline(domain.DisplayID(beadNamespace, beadID, n)), linkPhrase(depType), output.EscapeInline(domain.DisplayID(dependsNamespace, dependsOnID, n)), depType)
 	writePriorityChanges(stdout, changes)
+	_, _ = ready.WriteTo(stdout)
 	_, _ = blocked.WriteTo(stdout)
 	return 0
 }

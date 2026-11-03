@@ -94,6 +94,73 @@ func TestRunErrorOutputDecoratedSameRule(t *testing.T) {
 	}
 }
 
+func TestRunLMColorAlwaysGolden(t *testing.T) {
+	initBeadsDir(t)
+	blocker := mustCreateBead(t, "--title", "alpha")
+	blocked := mustCreateBead(t, "--title", "beta", "--blocked-by", blocker)
+	gate := mustGateCreateCmd(t, []string{blocked}, "sign-off", "--kind", "human")
+	if _, errS, code := runCmd(t, []string{"update", "--claim", blocker}, ""); code != 0 {
+		t.Fatalf("update --claim: exit code = %d, stderr = %q", code, errS)
+	}
+	blockerAlias := mustDisplayAlias(t, blocker)
+	blockedAlias := mustDisplayAlias(t, blocked)
+	gateAlias := mustDisplayAlias(t, gate)
+	boldID := func(alias string) string {
+		i := strings.LastIndex(alias, "-")
+		return alias[:i+1] + "\x1b[1m" + alias[i+1:] + "\x1b[0m"
+	}
+
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			"list",
+			[]string{"list", "--sort", "priority"},
+			"\x1b[36mFilter: status=\"unfinished\"\x1b[0m\n" +
+				"- " + boldID(blockerAlias) + " [\x1b[33min_progress\x1b[0m/P2] alpha  @test-actor\n" +
+				"- " + boldID(blockedAlias) + " [open/P2] beta\n" +
+				"- " + boldID(gateAlias) + " [gate/open/P2] gate: sign-off\n",
+		},
+		{
+			"blocked",
+			[]string{"blocked"},
+			"- " + boldID(blockedAlias) + " [open/P2] beta  ← blocked by: " + blockerAlias + ", gate:" + gateAlias + "\n",
+		},
+		{
+			"gate",
+			[]string{"gate"},
+			"## Blocked by other work\n" +
+				"- " + boldID(gateAlias) + " [gate/open/P2] sign-off  → blocks: " + blockedAlias + "\n" +
+				"  - When resolved: (--check に記載なし)\n" +
+				"  - Blocked by: " + blockerAlias + "\n",
+		},
+	}
+	t.Setenv("LM_COLOR", "always")
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, errS, code := runCmd(t, c.args, "")
+			if code != 0 {
+				t.Fatalf("%v: exit code = %d, stderr = %q", c.args, code, errS)
+			}
+			if out != c.want {
+				t.Errorf("%v stdout = %q, want %q", c.args, out, c.want)
+			}
+		})
+		t.Run(c.name+" with NO_COLOR", func(t *testing.T) {
+			t.Setenv("NO_COLOR", "1")
+			out, errS, code := runCmd(t, c.args, "")
+			if code != 0 {
+				t.Fatalf("%v: exit code = %d, stderr = %q", c.args, code, errS)
+			}
+			if strings.Contains(out, "\x1b[") {
+				t.Errorf("%v stdout = %q, want no ANSI escapes with NO_COLOR set", c.args, out)
+			}
+		})
+	}
+}
+
 func stripANSI(s string) string {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {

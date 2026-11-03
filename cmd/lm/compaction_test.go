@@ -395,6 +395,138 @@ func TestShowDescriptionHijackAttemptsNeutralized(t *testing.T) {
 	}
 }
 
+func createClosedBeadWithSummary(t *testing.T, summary, description string) string {
+	t.Helper()
+	id := mustCreateBead(t, "--title", "t", "--summary", summary)
+	if _, errS, code := runCmd(t, []string{"update", "--description", description, id}, ""); code != 0 {
+		t.Fatalf("update --description: exit code = %d, stderr = %q", code, errS)
+	}
+	if _, errS, code := runCmd(t, []string{"close", id}, ""); code != 0 {
+		t.Fatalf("close: exit code = %d, stderr = %q", code, errS)
+	}
+	return id
+}
+
+func TestCompactionNoticeLinePlacement(t *testing.T) {
+	initBeadsDir(t)
+	writeBeadsConfig(t, `{"compaction":{"retention_days":7}}`)
+
+	id := createClosedBeadWithSummary(t, "S1", "long body text")
+
+	t.Setenv("LM_NOW", "2099-01-01T00:00:00Z")
+	out, errS, code := runCmd(t, []string{"show", id}, "")
+	if code != 0 {
+		t.Fatalf("show: exit code = %d, stderr = %q", code, errS)
+	}
+	want := "## Description\n\nS1\nCompacted: description omitted (closed more than retention_days=7 days ago); use `lm export` or `lm show --full` to see the full record\n\n"
+	if got := descriptionSection(t, out); got != want {
+		t.Errorf("description section = %q, want %q", got, want)
+	}
+}
+
+func TestCompactionExportIncludesFullDescription(t *testing.T) {
+	initBeadsDir(t)
+	writeBeadsConfig(t, `{"compaction":{"retention_days":1}}`)
+
+	id := createClosedBeadWithSummary(t, "S1", "long body text")
+
+	t.Setenv("LM_NOW", "2099-01-01T00:00:00Z")
+	shown, errS, code := runCmd(t, []string{"show", id}, "")
+	if code != 0 {
+		t.Fatalf("show: exit code = %d, stderr = %q", code, errS)
+	}
+	if shownDesc := descriptionSection(t, shown); !strings.Contains(shownDesc, "Compacted:") || strings.Contains(shownDesc, "long body text") {
+		t.Fatalf("description section = %q, want it compacted so this test exercises the projection path", shownDesc)
+	}
+
+	exported, errS, code := runCmd(t, []string{"export"}, "")
+	if code != 0 {
+		t.Fatalf("export: exit code = %d, stderr = %q", code, errS)
+	}
+	if !strings.Contains(exported, "long body text") {
+		t.Errorf("export output = %q, want the full description", exported)
+	}
+	if strings.Contains(exported, "Compacted:") {
+		t.Errorf("export output = %q, want no Compacted: notice", exported)
+	}
+}
+
+func TestCompactionListRowUnchanged(t *testing.T) {
+	initBeadsDir(t)
+
+	createClosedBeadWithSummary(t, "S1", "long body text")
+	t.Setenv("LM_NOW", "2099-01-01T00:00:00Z")
+
+	writeBeadsConfig(t, `{"compaction":{"retention_days":0}}`)
+	compactedOut, errS, code := runCmd(t, []string{"list", "--all"}, "")
+	if code != 0 {
+		t.Fatalf("list --all (retention_days=0): exit code = %d, stderr = %q", code, errS)
+	}
+	writeBeadsConfig(t, `{"compaction":{"retention_days":100000}}`)
+	retainedOut, errS, code := runCmd(t, []string{"list", "--all"}, "")
+	if code != 0 {
+		t.Fatalf("list --all (retention_days=100000): exit code = %d, stderr = %q", code, errS)
+	}
+	if compactedOut != retainedOut {
+		t.Errorf("list output differs by retention_days:\nretention_days=0:      %q\nretention_days=100000: %q", compactedOut, retainedOut)
+	}
+	if strings.Contains(compactedOut, "Compacted:") || strings.Contains(retainedOut, "Compacted:") {
+		t.Errorf("list output = %q / %q, want no Compacted: notice in enumeration rows", compactedOut, retainedOut)
+	}
+	if !strings.Contains(compactedOut, "t") {
+		t.Errorf("list output = %q, want the closed Bead listed under --all", compactedOut)
+	}
+}
+
+func TestBDNowDoesNotAffectClosedAt(t *testing.T) {
+	initBeadsDir(t)
+
+	t.Setenv("LM_NOW", "2000-01-01T00:00:00Z")
+	id := mustCreateBead(t, "--title", "t")
+	if _, errS, code := runCmd(t, []string{"close", id}, ""); code != 0 {
+		t.Fatalf("close: exit code = %d, stderr = %q", code, errS)
+	}
+
+	out, errS, code := runCmd(t, []string{"show", id}, "")
+	if code != 0 {
+		t.Fatalf("show: exit code = %d, stderr = %q", code, errS)
+	}
+	currentYear := time.Now().UTC().Format("2006")
+	if got := closedAtFrom(t, out); got.Format("2006") != currentYear {
+		t.Errorf("closed_at = %v, want a timestamp from the real clock (year %s) regardless of LM_NOW", got, currentYear)
+	}
+}
+
+func TestCompactionEmptySummaryNeverCompacts(t *testing.T) {
+	initBeadsDir(t)
+	writeBeadsConfig(t, `{"compaction":{"retention_days":1}}`)
+
+	const id = "a1111111111111111111111111"
+	line := `{"_type":"bead","id":"` + id + `","namespace":"lm","title":"t","status":"closed","priority":2,"type":"task","description":"long body text","summary":"","labels":[],"created_at":"2026-01-01T00:00:00.000Z","updated_at":"2026-01-01T00:00:00.000Z","closed_at":"2026-01-02T00:00:00.000Z"}`
+	mustImport(t, line+"\n")
+
+	exported, errS, code := runCmd(t, []string{"export"}, "")
+	if code != 0 {
+		t.Fatalf("export: exit code = %d, stderr = %q", code, errS)
+	}
+	if !strings.Contains(exported, `"summary":""`) {
+		t.Fatalf("export output = %q, want the Bead stored with an empty-string summary", exported)
+	}
+
+	t.Setenv("LM_NOW", "2099-01-01T00:00:00Z")
+	out, errS, code := runCmd(t, []string{"show", id}, "")
+	if code != 0 {
+		t.Fatalf("show: exit code = %d, stderr = %q", code, errS)
+	}
+	desc := descriptionSection(t, out)
+	if !strings.Contains(desc, "long body text") {
+		t.Errorf("description section = %q, want the full description shown when the summary is the empty string", desc)
+	}
+	if strings.Contains(desc, "Compacted:") {
+		t.Errorf("description section = %q, want no Compacted: notice when the summary is the empty string", desc)
+	}
+}
+
 func TestShowCompactedSummaryPreservesNewlines(t *testing.T) {
 	initBeadsDir(t)
 	writeBeadsConfig(t, `{"compaction":{"retention_days":1}}`)

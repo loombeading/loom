@@ -5,8 +5,8 @@
 ## 出力
 
 - すべてのコマンドは Markdown だけを出力する。出力形式を切り替えるフラグは無い。
-- 標準出力が端末でないとき、出力に装飾（ANSI エスケープ）を含まない。
-- コマンドごとの見出しと行の項目構成（例: `lm list` の `- <ID> [<status>/P<n>] <title>`、`lm blocked` の `← blocked by: <ID>`、`lm show` の `## Description`・`## Dependencies`・`## History`）はリリース間で変えない。変えるときは互換性の無い変更としてリリースする。見出しと行の構成に頼ってよく、説明文・理由の文面には頼らない。
+- 標準出力が端末でないとき、装飾（ANSI エスケープ）を除いた出力を出す。
+- コマンドごとの見出しと行の項目構成（例: `lm list` の `- <ID> [<status>/P<n>] <title>`、`lm blocked` の `← blocked by: <ID>`、`lm show` の `## Description`・`## Dependencies`・`## History`）はリリース間で保ち、変えるときは互換性の無い変更としてリリースする。頼ってよいのは見出しと行の構成で、説明文・理由の文面はリリース間で変わりうる。
 
 ## JSONL の export と import
 
@@ -15,25 +15,25 @@
 ## Ready の判定
 
 - `lm ready` が返すのは、`open` で、未完了（`closed`・`cancelled` 以外）の `blocks` 依存先を持たず、未完了の `parent-child` の子を持たない Bead である。
-- `closed`・`cancelled` の依存先と、取り除いた（`removed`）リンクは Ready を妨げない。子がすべて終端になった親は Ready に出る。
-- Gate は `lm ready` に出ない。`lm ready` と `lm blocked` は互いに重ならず、両者を合わせると Gate を除く `open` の Bead の全体になる。
+- `closed`・`cancelled` の依存先と、取り除いた（`removed`）リンクは Ready の判定から外れる。子がすべて終端になった親は Ready に出る。
+- Gate は `lm ready` の対象外で、`lm gate` で一覧される。`lm ready` と `lm blocked` は互いに重ならず、両者を合わせると Gate を除く `open` の Bead の全体になる。
 
 ## claim と解放
 
-- claim 済み（`in_progress`）の Bead は `lm ready` に出ない。claim した本人の `lm update <id> --release`、または他の主体の `lm update <id> --release --force` で `open` に戻り、再び `lm ready` に出る。
-- 他の主体が claim した Bead は `--force` 無しでは解放できない。`--force` による解放は、通常の解放と区別して履歴に残る。
-- 未完了の `blocks` 依存先を持つ Bead の `lm update <id> --claim` は Exit Code 1 で拒否され、状態と担当者は変わらない。
+- claim 済み（`in_progress`）の Bead は `lm ready` から外れる。claim した本人の `lm update <id> --release`、または他の主体の `lm update <id> --release --force` で `open` に戻り、再び `lm ready` に出る。
+- 他の主体が claim した Bead を解放するには `--force` が要る。`--force` による解放は、通常の解放と区別して履歴に残る。
+- 未完了の `blocks` 依存先を持つ Bead の `lm update <id> --claim` は Exit Code 1 で拒否され、状態と担当者はそのまま残る。
 - 複数のプロセスが同時に `lm ready --claim` しても、同じ Bead を claim できるのはちょうど 1 つである。
 
 ## Gate の終端化
 
-- Gate を終端にできるのは `lm gate resolve` と `lm gate reject` だけである。`lm close` と `lm update --status` は Gate に対して拒否される。Gate は claim できない。
+- Gate を終端にできるのは `lm gate resolve` と `lm gate reject` だけである。`lm close` と `lm update --status` は Gate に対して拒否される。Gate への claim も拒否される。
 - `lm gate resolve` と `lm gate reject` は `--reason` が無いと拒否される。`lm gate reject` は Gate 以外の Bead に対して拒否される。
 - `lm gate reject` は、その Gate が塞いでいる `open`・`in_progress` の Bead をすべて `cancelled` にし、Gate 自体も `cancelled` にする。
 
 ## 非対話
 
-- どのコマンドもエディタ・ページャ・確認プロンプトを起動しない。標準入力が閉じていても止まらずに終わる。
+- どのコマンドもエディタ・ページャ・確認プロンプトを起動せずに動き、標準入力が閉じていても止まらずに終わる。
 - 本文・理由などの長い入力は、フラグの値に `-` を渡すと標準入力から読む（例: `--reason -`）。
 
 ## 終了コード

@@ -8,9 +8,70 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
+
+var helpFlagLine = regexp.MustCompile(`(?m)^\s+-([A-Za-z0-9][A-Za-z0-9-]*)`)
+
+func flagSetFlagNames(t *testing.T, args []string) []string {
+	t.Helper()
+	_, errS, code := runCmd(t, args, "")
+	if code != 0 {
+		t.Fatalf("%v: exit code = %d, stderr = %q", args, code, errS)
+	}
+	var names []string
+	for _, m := range helpFlagLine.FindAllStringSubmatch(errS, -1) {
+		if !slices.Contains(names, m[1]) {
+			names = append(names, m[1])
+		}
+	}
+	return names
+}
+
+func assertFlagsAgree(t *testing.T, label string, flagSet, registered []string, zshOut, bashOut string) {
+	t.Helper()
+	for _, f := range flagSet {
+		if !slices.Contains(registered, f) {
+			t.Errorf("%s: FlagSet flag --%s is missing from the registry", label, f)
+		}
+		if !strings.Contains(zshOut, "--"+f) {
+			t.Errorf("%s: zsh completion is missing --%s", label, f)
+		}
+		if !strings.Contains(bashOut, "--"+f) {
+			t.Errorf("%s: bash completion is missing --%s", label, f)
+		}
+	}
+	for _, f := range registered {
+		if !slices.Contains(flagSet, f) {
+			t.Errorf("%s: registry flag --%s is not defined by the FlagSet", label, f)
+		}
+	}
+}
+
+func TestRegistryFlagsMatchFlagSetsAndCompletion(t *testing.T) {
+	zshOut, _, code := runCmd(t, []string{"completion", "zsh"}, "")
+	if code != 0 {
+		t.Fatalf("completion zsh: exit code = %d", code)
+	}
+	bashOut, _, code := runCmd(t, []string{"completion", "bash"}, "")
+	if code != 0 {
+		t.Fatalf("completion bash: exit code = %d", code)
+	}
+	for _, c := range registry {
+		if len(c.sub) == 0 {
+			assertFlagsAgree(t, c.name, flagSetFlagNames(t, []string{c.name, helpFlag}), c.flags, zshOut, bashOut)
+			continue
+		}
+		if c.bare != "" {
+			assertFlagsAgree(t, c.name, flagSetFlagNames(t, []string{c.name, helpFlag + "=true"}), c.flags, zshOut, bashOut)
+		}
+		for _, s := range c.sub {
+			assertFlagsAgree(t, c.name+" "+s.name, flagSetFlagNames(t, []string{c.name, s.name, helpFlag}), s.flags, zshOut, bashOut)
+		}
+	}
+}
 
 var docRefPattern = regexp.MustCompile(`\b(PRD|EDD)\b|[0-9]章|Phase [0-9]`)
 

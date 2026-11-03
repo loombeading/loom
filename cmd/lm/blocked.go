@@ -66,7 +66,9 @@ func runBlocked(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	blockedByRow := make(map[string][]string, len(blocked))
+	heldSince := make(map[string]string, len(blocked))
 	for _, b := range blocked {
+		heldSince[b.ID] = b.HeldSince
 		row, err := blockedByIDs(resolver, b.Blockers, n)
 		if err != nil {
 			output.WriteError(stderr, err.Error())
@@ -76,6 +78,7 @@ func runBlocked(args []string, stdout, stderr io.Writer) int {
 	}
 	for i := range rows {
 		rows[i].BlockedBy = blockedByRow[rows[i].CanonicalID]
+		rows[i].HeldSince = heldSince[rows[i].CanonicalID]
 	}
 	if err := withEffective(ctx, db.SQL, rows, eff, n); err != nil {
 		output.WriteError(stderr, err.Error())

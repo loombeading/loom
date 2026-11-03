@@ -26,3 +26,21 @@ func TestSortBeads(t *testing.T) {
 		t.Errorf("SortBeads() order = %v, want %v", got, want)
 	}
 }
+
+func TestSortBeadsPutsDemandAheadOfAnOlderRowAtTheSamePriority(t *testing.T) {
+	rows := []BeadRow{
+		{CanonicalID: "bd-old", Priority: 2, CreatedAt: "2026-01-01T00:00:00Z"},
+		{CanonicalID: "bd-demand", Priority: 2, CreatedAt: "2026-01-02T00:00:00Z", Demand: true},
+		{CanonicalID: "bd-first", Priority: 1, CreatedAt: "2026-01-03T00:00:00Z"},
+	}
+	SortBeads(rows)
+
+	want := []string{"bd-first", "bd-demand", "bd-old"}
+	got := make([]string, len(rows))
+	for i, r := range rows {
+		got[i] = r.CanonicalID
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("SortBeads() order = %v, want %v", got, want)
+	}
+}

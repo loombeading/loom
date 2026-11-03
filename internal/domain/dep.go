@@ -212,6 +212,33 @@ func RemoveLink(ctx context.Context, tx *sql.Tx, actor, beadID, dependsOnID, dep
 	})
 }
 
+const errRemoveLeavesUnaffiliatedMsg = "外すと子が無所属になる。先に lm update <子> --add-label exempt:milestone --reason <理由> で無所属を記録するか、lm dep add <子> <別の親> --type parent-child で別の親へ付け替える"
+
+func RemoveLinkRequiringMilestone(ctx context.Context, tx *sql.Tx, actor, beadID, dependsOnID, depType, occurredAt, reason string) error {
+	if depType != ParentChildDepType {
+		return RemoveLink(ctx, tx, actor, beadID, dependsOnID, depType, occurredAt, reason)
+	}
+	child, err := GetBead(ctx, tx, beadID)
+	if err != nil {
+		return err
+	}
+	wasAffiliated := false
+	if child.BeadType != BeadTypeGate {
+		wasAffiliated, err = ancestorHasMilestoneLabel(ctx, tx, beadID, true)
+	}
+	if err == nil {
+		err = RemoveLink(ctx, tx, actor, beadID, dependsOnID, depType, occurredAt, reason)
+	}
+	if err != nil || !wasAffiliated {
+		return err
+	}
+	affiliated, err := ancestorHasMilestoneLabel(ctx, tx, beadID, true)
+	if err == nil && !affiliated {
+		err = &ValidationError{Msg: errRemoveLeavesUnaffiliatedMsg}
+	}
+	return err
+}
+
 func checkLinkConstraints(ctx context.Context, tx *sql.Tx, beadID, dependsOnID, depType string) error {
 	if beadID == dependsOnID {
 		return newSelfLinkError(ctx, tx, beadID)

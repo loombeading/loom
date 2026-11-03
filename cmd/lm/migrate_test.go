@@ -23,6 +23,9 @@ func makePreReleaseBeadsDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = db.Close() }()
+	if _, err := db.ExecContext(t.Context(), "DROP INDEX idx_beads_short_id"); err != nil {
+		t.Fatalf("alter pre-release database: %v", err)
+	}
 	if _, err := db.ExecContext(t.Context(), "PRAGMA user_version = 19"); err != nil {
 		t.Fatalf("build pre-release database: %v", err)
 	}
@@ -69,6 +72,41 @@ func TestMigrateCLIReadOnlyExitsNonZero(t *testing.T) {
 	}
 	if !strings.HasPrefix(errS, "Error: ") {
 		t.Fatalf("migrate stderr = %q, want it to start with %q", errS, "Error: ")
+	}
+}
+
+func TestRunNewerSchemaExitsOneAndLeavesDatabase(t *testing.T) {
+	initBeadsDir(t)
+	rawVersion := func() int {
+		db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(beadsDBPath(t))+"?_journal_mode=WAL")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = db.Close() }()
+		var v int
+		if err := db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&v); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(beadsDBPath(t))+"?_journal_mode=WAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(t.Context(), "PRAGMA user_version = 999"); err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	out, errS, code := runCmd(t, []string{"list"}, "")
+	if code != 1 {
+		t.Fatalf("list: exit code = %d, want 1 (stdout=%q stderr=%q)", code, out, errS)
+	}
+	if !strings.Contains(errS, "a newer lm is required") {
+		t.Fatalf("list stderr = %q, want it to say a newer lm is required", errS)
+	}
+	if v := rawVersion(); v != 999 {
+		t.Fatalf("user_version = %d, want 999 left untouched", v)
 	}
 }
 

@@ -18,7 +18,7 @@ Loom に関心を持っていただき、ありがとうございます。この
 
 ## Pull Request
 
-このリポジトリは、リリースごとに開発の成果をまとめて公開しています。ここに届いた Pull Request は取り込みません。そのため、貢献者に DCO（Developer Certificate of Origin・出所の証明）の署名や CLA（Contributor License Agreement・貢献者ライセンス契約）の締結は求めません。
+このリポジトリに届いた Pull Request は取り込みません。そのため、貢献者に DCO（Developer Certificate of Origin・出所の証明）の署名や CLA（Contributor License Agreement・貢献者ライセンス契約）の締結は求めません。
 
 ## 要件文書
 

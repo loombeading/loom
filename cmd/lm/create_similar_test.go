@@ -5,9 +5,11 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/loombeading/loom/internal/domain"
 	"github.com/loombeading/loom/internal/storage"
@@ -100,8 +102,9 @@ func TestCreateSimilarExclusions(t *testing.T) {
 
 	out, _, _ := runCmd(t, []string{"create", "--title", "alpha beta", "--parent", parent, "--blocked-by", blocker}, "")
 	lines := similarSection(out)
-	if len(lines) != 1 || !strings.HasPrefix(lines[0], "- "+mustDisplayAlias(t, other)+" ") {
-		t.Errorf("## Similar lines = %q, want only %s:\n%s", lines, other, out)
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], "- "+mustDisplayAlias(t, other)+" ") ||
+		!strings.HasPrefix(lines[1], "- "+mustDisplayAlias(t, closed)+" [closed/") {
+		t.Errorf("## Similar lines = %q, want %s then closed %s:\n%s", lines, other, closed, out)
 	}
 
 	gateOut, _, _ := runCmd(t, []string{"create", "--title", "alpha beta", "--type", "gate", "--label", "kind:adjudicate"}, "")
@@ -126,6 +129,91 @@ func TestCreateSimilarLimitAndOrder(t *testing.T) {
 		if !strings.HasPrefix(lines[i], "- "+mustDisplayAlias(t, id)+" ") {
 			t.Errorf("line %d = %q, want %s", i, lines[i], id)
 		}
+	}
+}
+
+func TestCreateSimilarClosedSlot(t *testing.T) {
+	initBeadsDir(t)
+	old := mustCreateBead(t, "--title", "alpha beta old")
+	if _, errS, code := runCmd(t, []string{"close", old}, ""); code != 0 {
+		t.Fatalf("close: %q", errS)
+	}
+	ctx := context.Background()
+	db, err := storage.Open(ctx, beadsDir(t), storage.OpenOptions{Env: func(string) string { return "" }, Actor: "test"})
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	oldClosedAt := time.Now().UTC().Add(-31 * 24 * time.Hour).Format("2006-01-02T15:04:05.000Z07:00")
+	_, err = db.SQL.ExecContext(ctx, `UPDATE beads SET closed_at = ? WHERE id = ?`, oldClosedAt, old)
+	_ = db.Close()
+	if err != nil {
+		t.Fatalf("backdate closed_at: %v", err)
+	}
+	open := make([]string, 0, 6)
+	closed := make([]string, 0, 4)
+	for range 6 {
+		open = append(open, mustCreateBead(t, "--title", "alpha beta open"))
+	}
+	for range 4 {
+		id := mustCreateBead(t, "--title", "alpha beta closed")
+		if _, errS, code := runCmd(t, []string{"close", id}, ""); code != 0 {
+			t.Fatalf("close: %q", errS)
+		}
+		closed = append(closed, id)
+	}
+	cancelled := mustCreateBead(t, "--title", "alpha beta cancelled")
+	if _, errS, code := runCmd(t, []string{"update", cancelled, "--status", "cancelled"}, ""); code != 0 {
+		t.Fatalf("cancel: %q", errS)
+	}
+
+	out, errS, code := runCmd(t, []string{"create", "--title", "alpha beta"}, "")
+	if code != 0 {
+		t.Fatalf("create: exit %d, stderr %q", code, errS)
+	}
+	lines := similarSection(out)
+	want := append(append([]string{}, open[:5]...), closed[:3]...)
+	if len(lines) != len(want) {
+		t.Fatalf("## Similar lines = %d, want %d:\n%s", len(lines), len(want), out)
+	}
+	for i, id := range want {
+		status := "[open/"
+		if i >= 5 {
+			status = "[closed/"
+		}
+		if !strings.HasPrefix(lines[i], "- "+mustDisplayAlias(t, id)+" "+status) {
+			t.Errorf("line %d = %q, want %s %s", i, lines[i], id, status)
+		}
+	}
+}
+
+func TestCreateSimilarMilestone(t *testing.T) {
+	initBeadsDir(t)
+	epic := mustCreateBead(t, "--title", "release epic", "--label", "milestone:v1")
+	mid := mustCreateBead(t, "--title", "middle", "--parent", epic)
+	child := mustCreateBead(t, "--title", "alpha beta child", "--parent", mid)
+	loose := mustCreateBead(t, "--title", "alpha beta loose", "-p", "3")
+
+	out, errS, code := runCmd(t, []string{"create", "--title", "alpha beta", "--no-milestone", "outside"}, "")
+	if code != 0 {
+		t.Fatalf("create: exit %d, stderr %q", code, errS)
+	}
+	lines := similarSection(out)
+	if len(lines) != 3 {
+		t.Fatalf("## Similar lines = %q, want 3:\n%s", lines, out)
+	}
+	if !strings.HasPrefix(lines[0], "- "+mustDisplayAlias(t, child)+" ") || !strings.HasSuffix(lines[0], "  match=2/2  milestone="+mustDisplayAlias(t, epic)) {
+		t.Errorf("line 0 = %q, want %s with milestone=%s", lines[0], child, epic)
+	}
+	if !strings.HasPrefix(lines[1], "- "+mustDisplayAlias(t, loose)+" ") || !strings.HasSuffix(lines[1], "  match=2/2") {
+		t.Errorf("line 1 = %q, want %s without milestone", lines[1], loose)
+	}
+	if !strings.HasPrefix(lines[2], "- Hint: ") || !strings.Contains(lines[2], "--type parent-child") {
+		t.Errorf("line 2 = %q, want the Hint line", lines[2])
+	}
+
+	plain, plainErr, _ := runCmd(t, []string{"create", "--title", "alpha beta"}, "")
+	if strings.Contains(plain, "- Hint: ") || !strings.Contains(plain, "milestone="+mustDisplayAlias(t, epic)) {
+		t.Errorf("stdout without exempt = %q (stderr %q), want milestone= and no Hint", plain, plainErr)
 	}
 }
 
@@ -171,5 +259,55 @@ func TestWriteSimilarReadFailure(t *testing.T) {
 	writeSimilar(ctx, &stdout, io.Discard, db.SQL, domain.DefaultNamespace, "alpha beta", "x", nil)
 	if !strings.Contains(stdout.String(), "## Similar") {
 		t.Errorf("stdout = %q, want %s listed", stdout.String(), id)
+	}
+}
+
+type rowSQLErrQuerier struct {
+	domain.Querier
+
+	match string
+}
+
+func (q rowSQLErrQuerier) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	if strings.Contains(query, q.match) {
+		return q.Querier.QueryRowContext(ctx, "SELECT no_such_column FROM beads")
+	}
+	return q.Querier.QueryRowContext(ctx, query, args...)
+}
+
+func TestWriteSimilarMilestoneReadFailure(t *testing.T) {
+	initBeadsDir(t)
+	epic := mustCreateBead(t, "--title", "release epic", "--label", "milestone:v1")
+	mustCreateBead(t, "--title", "alpha beta child", "--parent", epic)
+	closed := mustCreateBead(t, "--title", "alpha beta done")
+	if _, errS, code := runCmd(t, []string{"close", closed, "--reason", "done"}, ""); code != 0 {
+		t.Fatalf("close: exit %d, stderr %q", code, errS)
+	}
+	newID := mustCreateBead(t, "--title", "alpha beta", "--no-milestone", "outside")
+	ctx := context.Background()
+	db, err := storage.Open(ctx, beadsDir(t), storage.OpenOptions{Env: func(string) string { return "" }, Actor: "test"})
+	if err != nil {
+		t.Fatalf("storage.Open: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	newID, err = domain.ResolveID(ctx, db.SQL, newID)
+	if err != nil {
+		t.Fatalf("ResolveID: %v", err)
+	}
+	for _, q := range []domain.Querier{
+		failingQuerier{Querier: db.SQL, match: "closed_at >="},
+		rowSQLErrQuerier{Querier: db.SQL, match: "WITH RECURSIVE anc"},
+		rowSQLErrQuerier{Querier: db.SQL, match: "COALESCE(labels"},
+	} {
+		var stdout, stderr strings.Builder
+		writeSimilar(ctx, &stdout, &stderr, q, domain.DefaultNamespace, "alpha beta", newID, nil)
+		if stdout.Len() != 0 || !strings.Contains(stderr.String(), "similar beads: ") {
+			t.Errorf("%#v: stdout %q, stderr %q; want no stdout and a similar beads error", q, stdout.String(), stderr.String())
+		}
+	}
+	var stdout strings.Builder
+	writeSimilar(ctx, &stdout, io.Discard, db.SQL, domain.DefaultNamespace, "alpha beta", newID, nil)
+	if !strings.Contains(stdout.String(), "- Hint: ") {
+		t.Errorf("stdout = %q, want the Hint line", stdout.String())
 	}
 }

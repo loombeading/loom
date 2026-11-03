@@ -201,13 +201,28 @@ func TestGateCancelAndReopenRejected(t *testing.T) {
 	}
 }
 
-func mustGateReject(t *testing.T, db *sql.DB, in GateRejectInput) []string {
+func TestGateCloseBeadRejectedWithTerminalOnlyResolve(t *testing.T) {
+	db := testDB(t)
+	gateID := mustCreate(t, db, CreateInput{Title: "g", Priority: 2, BeadType: "gate", Namespace: "lm", Actor: "u", Now: "n0"})
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	err = CloseBead(context.Background(), tx, CloseInput{ID: gateID, Actor: "u", Now: "n1"})
+	if !errors.Is(err, ErrGateTerminalOnlyResolve) {
+		t.Fatalf("closing a gate Bead = %v, want ErrGateTerminalOnlyResolve", err)
+	}
+}
+
+func mustGateReject(t *testing.T, db *sql.DB, in GateRejectInput) GateRejectResult {
 	t.Helper()
 	tx, err := db.BeginTx(context.Background(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ids, err := GateReject(context.Background(), tx, in)
+	res, err := GateReject(context.Background(), tx, in)
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("GateReject: %v", err)
@@ -215,7 +230,31 @@ func mustGateReject(t *testing.T, db *sql.DB, in GateRejectInput) []string {
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
-	return ids
+	return res
+}
+
+func TestGateRejectAutoResolvesOtherGatesBlockingCancelledBeads(t *testing.T) {
+	db := testDB(t)
+	target := newBead(t, db, "n0")
+	other := newBead(t, db, "n0")
+	rejected := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "x"}, Namespace: "lm", Actor: "u", Now: "n1"})
+	sibling := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "y"}, Namespace: "lm", Actor: "u", Now: "n1"})
+	stillBlocking := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target, other}, Fields: GateFields{Subject: "z"}, Namespace: "lm", Actor: "u", Now: "n1"})
+
+	res := mustGateReject(t, db, GateRejectInput{ID: rejected, Reason: "no", Actor: "u", Now: "n2"})
+	if !containsID(res.AutoResolved, sibling) {
+		t.Errorf("AutoResolved = %v, want %q", res.AutoResolved, sibling)
+	}
+	if containsID(res.AutoResolved, rejected) || containsID(res.AutoResolved, stillBlocking) {
+		t.Errorf("AutoResolved = %v, must exclude the rejected gate %q and the gate %q that still blocks an unfinished Bead", res.AutoResolved, rejected, stillBlocking)
+	}
+	g, err := GetBead(context.Background(), db, sibling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Status != StatusClosed {
+		t.Errorf("sibling gate status = %q, want closed", g.Status)
+	}
 }
 
 func TestGateRejectRequiresReason(t *testing.T) {
@@ -257,7 +296,7 @@ func TestGateRejectCancelsBlockedOpenAndInProgressBeadsAndTheGate(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	cancelled := mustGateReject(t, db, GateRejectInput{ID: gateID, Reason: "won't do", Actor: "u", Now: "n3"})
+	cancelled := mustGateReject(t, db, GateRejectInput{ID: gateID, Reason: "won't do", Actor: "u", Now: "n3"}).Cancelled
 	if !containsID(cancelled, target1) || !containsID(cancelled, target2) {
 		t.Errorf("cancelled = %v, want both %q and %q", cancelled, target1, target2)
 	}
@@ -779,5 +818,34 @@ func TestGateWaitProgressScanErrorOnChild(t *testing.T) {
 
 	if _, err := GateWaitProgress(context.Background(), db, gateID); err == nil {
 		t.Fatal("GateWaitProgress with a child's namespace NULL: err = nil, want a scan error")
+	}
+}
+
+func TestGateRejectAndUpdateCancelSurfaceAutoResolveErrors(t *testing.T) {
+	db := testDB(t)
+	target := newBead(t, db, "n0")
+	rejected := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "x"}, Namespace: "lm", Actor: "u", Now: "n1"})
+	sibling := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "y"}, Namespace: "lm", Actor: "u", Now: "n1"})
+	if _, err := db.ExecContext(context.Background(), `UPDATE beads SET labels = 'not-json' WHERE id = ?`, sibling); err != nil {
+		t.Fatal(err)
+	}
+
+	rejectTx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rejectTx.Rollback() }()
+	if _, err := GateReject(context.Background(), rejectTx, GateRejectInput{ID: rejected, Reason: "no", Actor: "u", Now: "n2"}); err == nil {
+		t.Error("GateReject with a malformed sibling gate = nil error, want the auto-resolve error")
+	}
+	_ = rejectTx.Rollback()
+
+	updateTx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = updateTx.Rollback() }()
+	if _, _, err := UpdateBeadAutoResolve(context.Background(), updateTx, UpdateInput{Priority: -1, ID: target, Cancel: true, Reason: "r", Actor: "u", Now: "n3"}); err == nil {
+		t.Error("UpdateBeadAutoResolve cancel with a malformed gate = nil error, want the auto-resolve error")
 	}
 }

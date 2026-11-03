@@ -301,6 +301,25 @@ func TestRemoveLinkNotFound(t *testing.T) {
 	}
 }
 
+func TestRemoveLinkRequiringMilestoneOtherTypesAndMissingBead(t *testing.T) {
+	db := testDB(t)
+	a := newBead(t, db, "n0")
+	b := newBead(t, db, "n1")
+	mustNoErr(t, mustAddLink(t, db, a, b, BlocksDepType))
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := RemoveLinkRequiringMilestone(context.Background(), tx, "u", a, b, BlocksDepType, "n2", ""); err != nil {
+		t.Fatalf("removing a blocks link = %v, want nil", err)
+	}
+	if err := RemoveLinkRequiringMilestone(context.Background(), tx, "u", "missing", b, ParentChildDepType, "n2", ""); err == nil {
+		t.Fatal("removing a parent-child link of a missing Bead = nil error, want an error")
+	}
+}
+
 func TestCreateBeadWithParentAndBlockedByEnforcesConstraints(t *testing.T) {
 	db := testDB(t)
 	parent1 := newBead(t, db, "n0")

@@ -56,6 +56,25 @@ func TestImportAtNestedFieldLevelLWW(t *testing.T) {
 	}
 }
 
+func TestImportAtWritesJSONLSetAtVerbatim(t *testing.T) {
+	db := testDB(t)
+	id := mustCreate(t, db, domain.CreateInput{
+		Title: "before", Priority: 2, BeadType: "task", Namespace: "lm",
+		Actor: "u", Now: "2050-01-01T00:00:00.000Z",
+	})
+
+	jsonl := `{"_type":"bead","id":"` + id + `","namespace":"lm","title":"after","status":"in_progress","priority":2,"type":"task","labels":[],"created_at":"2000-01-01T00:00:00.000Z","updated_at":"2000-06-01T00:00:00.000Z","_set_at":{"title":"2000-01-01T00:00:00.000Z","status":"2099-01-01T00:00:00.000Z"}}` + "\n"
+	mustImportLine(t, db, jsonl)
+
+	var statusSetAt string
+	if err := db.QueryRowContext(t.Context(), `SELECT status_set_at FROM beads WHERE id = ?`, id).Scan(&statusSetAt); err != nil {
+		t.Fatal(err)
+	}
+	if statusSetAt != "2099-01-01T00:00:00.000Z" {
+		t.Errorf("status_set_at = %q, want %q (the JSONL _set_at is written as is, not the merge time n0)", statusSetAt, "2099-01-01T00:00:00.000Z")
+	}
+}
+
 func TestImportNoAtDegradesToRowUpdatedAt(t *testing.T) {
 	db := testDB(t)
 	id := mustCreate(t, db, domain.CreateInput{
@@ -100,6 +119,34 @@ func TestImportDependencyAtRemovedLWW(t *testing.T) {
 	}
 	if !removed {
 		t.Errorf("removed = %v, want true (a newer _at.removed assertion must win)", removed)
+	}
+}
+
+func TestImportDependencyRemovedSetAtVerbatim(t *testing.T) {
+	db := testDB(t)
+	now := "2000-01-01T00:00:00.000Z"
+	a := mustCreate(t, db, domain.CreateInput{Title: "a", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: now})
+	b := mustCreate(t, db, domain.CreateInput{Title: "b", Priority: 2, BeadType: "task", Namespace: "lm", Actor: "u", Now: now})
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := domain.AddLink(context.Background(), tx, "u", a, b, domain.BlocksDepType, now, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	jsonl := `{"_type":"dependency","bead_id":"` + a + `","depends_on_id":"` + b + `","type":"blocks","created_at":"2000-01-01T00:00:00.000Z","removed":true,"_set_at":{"removed":"2099-01-01T00:00:00.000Z"}}` + "\n"
+	mustImportLine(t, db, jsonl)
+
+	var removedSetAt string
+	if err := db.QueryRowContext(t.Context(), `SELECT removed_set_at FROM dependencies WHERE bead_id = ? AND depends_on_id = ? AND type = 'blocks'`, a, b).Scan(&removedSetAt); err != nil {
+		t.Fatal(err)
+	}
+	if removedSetAt != "2099-01-01T00:00:00.000Z" {
+		t.Errorf("removed_set_at = %q, want %q (the JSONL _set_at is written as is, not the merge time n0)", removedSetAt, "2099-01-01T00:00:00.000Z")
 	}
 }
 

@@ -34,12 +34,8 @@ type AliasResolver struct {
 }
 
 func NewAliasResolverFor(ctx context.Context, q Querier, ids []string) (*AliasResolver, error) {
-	n, err := LoadShortIDs(ctx, q)
-	if err != nil {
-		return nil, err
-	}
 	if len(ids) == 0 {
-		return &AliasResolver{parent: map[string]string{}, rank: map[string]int{}, namespace: map[string]string{}, n: n}, nil
+		return &AliasResolver{parent: map[string]string{}, rank: map[string]int{}, namespace: map[string]string{}, n: ShortIDs{}}, nil
 	}
 
 	seedPlaceholders := valuesPlaceholders(len(ids))
@@ -74,11 +70,12 @@ func NewAliasResolverFor(ctx context.Context, q Querier, ids []string) (*AliasRe
 	}
 
 	namespaceRows, err := q.QueryContext(ctx, fmt.Sprintf(
-		`SELECT id, namespace FROM beads WHERE id IN (%s)`, ancestorPlaceholders), ancestorArgs...)
+		`SELECT id, namespace, short_id FROM beads WHERE id IN (%s)`, ancestorPlaceholders), ancestorArgs...)
 	if err != nil {
 		return nil, fmt.Errorf("alias resolver: query prefixes: %w", err)
 	}
-	namespace, err := scanNamespaceRows(namespaceRows)
+	n := ShortIDs{}
+	namespace, err := scanNamespaceRows(namespaceRows, n)
 	if err != nil {
 		return nil, err
 	}
@@ -107,15 +104,17 @@ func inPlaceholders(n int) string {
 	return strings.TrimSuffix(strings.Repeat("?,", n), ",")
 }
 
-func scanNamespaceRows(rows *sql.Rows) (map[string]string, error) {
+func scanNamespaceRows(rows *sql.Rows, n ShortIDs) (map[string]string, error) {
 	defer func() { _ = rows.Close() }()
 	namespace := map[string]string{}
 	for rows.Next() {
 		var id, p string
-		if err := rows.Scan(&id, &p); err != nil {
+		var short sql.NullString
+		if err := rows.Scan(&id, &p, &short); err != nil {
 			return nil, fmt.Errorf("alias resolver: scan namespace: %w", err)
 		}
 		namespace[id] = p
+		n[id] = short.String
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("alias resolver: iterate prefixes: %w", err)

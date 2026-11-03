@@ -1,4 +1,3 @@
-// @ts-check
 "use strict"
 
 const crypto = require("node:crypto")
@@ -10,12 +9,18 @@ const EXTRA_FILES = ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES"]
 const SBOM_NAME = "lm.spdx.json"
 const SUMS_NAME = "SHA256SUMS"
 
-function resolveVersion({ eventName, refName, sha }) {
+function resolveVersion({ eventName, refName, sha, inputVersion = "" }) {
   if (eventName === "push") {
     if (!TAG_RE.test(refName)) {
       throw new Error(`tag ${refName} is not a CalVer release tag`)
     }
     return refName
+  }
+  if (inputVersion !== "") {
+    if (!TAG_RE.test(inputVersion)) {
+      throw new Error(`version ${inputVersion} is not a CalVer release tag`)
+    }
+    return inputVersion
   }
   return `v0.0.0-dryrun+${sha.slice(0, 12)}`
 }
@@ -110,6 +115,7 @@ async function runResolveVersion({ context, core }) {
     eventName: context.eventName,
     refName: context.ref.replace(/^refs\/tags\//, ""),
     sha: context.sha,
+    inputVersion: context.payload?.inputs?.version ?? "",
   }))
 }
 

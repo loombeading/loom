@@ -184,6 +184,8 @@ func splitAliasSteps(rest string) (string, []int, bool) {
 	return hexPrefix, steps, true
 }
 
+const decimalBase = 10
+
 func parseAliasStep(p string) (int, bool) {
 	if p == "" || p[0] == '0' || len(p) > 9 {
 		return 0, false
@@ -193,7 +195,7 @@ func parseAliasStep(p string) (int, bool) {
 		if c < '0' || c > '9' {
 			return 0, false
 		}
-		v = v*10 + int(c-'0')
+		v = v*decimalBase + int(c-'0')
 	}
 	return v, true
 }

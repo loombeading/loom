@@ -74,9 +74,14 @@ func TestMigrateAtCurrentIsNoOp(t *testing.T) {
 }
 
 func TestMigrateRejectsOtherVersions(t *testing.T) {
-	for _, v := range []string{"2", "18", "19", "20"} {
+	for _, v := range []string{"3", "18", "19", "20"} {
 		dir := mustMkdirBeads(t)
 		_ = openWritable(t, dir).Close()
+		raw := mustOpenRawAt(t, DBPath(dir))
+		if _, err := raw.ExecContext(t.Context(), `DROP INDEX idx_beads_short_id`); err != nil {
+			t.Fatal(err)
+		}
+		_ = raw.Close()
 		setUserVersionRaw(t, dir, v)
 
 		if _, err := Migrate(context.Background(), dir, migrateOpts()); !errors.Is(err, ErrSchemaTooNew) {
@@ -337,6 +342,65 @@ func TestOpenRejectsOlderPopulatedDatabase(t *testing.T) {
 	}
 }
 
+func TestOpenOlderDatabaseIsNotMigratedImplicitly(t *testing.T) {
+	dir := mustMkdirBeads(t)
+	_ = openWritable(t, dir).Close()
+	setUserVersionRaw(t, dir, "-1")
+
+	_, err := Open(t.Context(), dir, migrateOpts())
+	if !errors.Is(err, ErrSchemaTooOld) {
+		t.Fatalf("err = %v, want ErrSchemaTooOld", err)
+	}
+	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != -1 {
+		t.Fatalf("user_version = %d, want -1 left untouched", v)
+	}
+	if _, err := os.Stat(DBPath(dir) + ".bak-schema-1"); err == nil {
+		t.Fatal("backup written by Open")
+	}
+}
+
+func TestMigrateReadOnlyWritesNoBackup(t *testing.T) {
+	dir := seedVersionZero(t)
+	requireNonRoot(t)
+	if err := os.Chmod(DBPath(dir), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(DBPath(dir), 0o644) })
+
+	if _, err := migrateTo(t.Context(), dir, migrateOpts(), addColumnMigration(), 1); !errors.Is(err, ErrReadOnlyWrite) {
+		t.Fatalf("err = %v, want ErrReadOnlyWrite", err)
+	}
+	if _, err := os.Stat(DBPath(dir) + ".bak-schema0"); err == nil {
+		t.Fatal("backup written in read-only mode")
+	}
+	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 0 {
+		t.Fatalf("user_version = %d, want 0", v)
+	}
+}
+
+func TestMigrateBackupIncludesUncheckpointedWAL(t *testing.T) {
+	dir := seedVersionZero(t)
+	raw := mustOpenRaw(t, dir)
+	raw.SetMaxOpenConns(1)
+	if _, err := raw.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint = 0`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.ExecContext(t.Context(), `INSERT INTO audit_log (occurred_at, actor, kind, origin) VALUES ('t2', 'a', 'schema', 'local')`); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(DBPath(dir) + "-wal")
+	if err != nil || info.Size() == 0 {
+		t.Fatalf("wal = %v (err %v), want an uncheckpointed WAL", info, err)
+	}
+
+	if _, err := migrateTo(t.Context(), dir, migrateOpts(), addColumnMigration(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if n := rawCount(t, DBPath(dir)+".bak-schema0", `SELECT count(*) FROM audit_log`); n != 2 {
+		t.Fatalf("backup audit_log rows = %d, want 2 (seed + WAL-only row)", n)
+	}
+}
+
 func TestMigrationFilesCoverEachVersion(t *testing.T) {
 	entries, err := fs.ReadDir(migrationFiles, "migrations")
 	if err != nil {
@@ -389,7 +453,7 @@ func TestSchemaShapeReportsQueryFailure(t *testing.T) {
 	}
 }
 
-func seedPrePublicVersionOne(t *testing.T) string {
+func seedUnpublishedVersionTwo(t *testing.T) string {
 	t.Helper()
 	dir := mustMkdirBeads(t)
 	db := openWritable(t, dir)
@@ -397,29 +461,36 @@ func seedPrePublicVersionOne(t *testing.T) string {
 		t.Fatal(err)
 	}
 	_ = db.Close()
-	setUserVersionRaw(t, dir, "1")
+	setUserVersionRaw(t, dir, "2")
 	return dir
 }
 
-func TestMigrateRelabelsPrePublicVersionOne(t *testing.T) {
-	dir := seedPrePublicVersionOne(t)
+func TestMigrateRelabelsUnpublishedToFloorPlusOne(t *testing.T) {
+	dir := seedUnpublishedVersionTwo(t)
 
-	res, err := Migrate(t.Context(), dir, migrateOpts())
+	res, err := migrateToCurrent(t, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	backup := DBPath(dir) + ".bak-schema1"
-	if res.From != 1 || res.To != 0 || res.Backup != backup {
+	backup := DBPath(dir) + ".bak-schema2"
+	if res.From != 2 || res.To != 1 || res.Backup != backup {
 		t.Fatalf("result = %+v", res)
 	}
-	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 0 {
-		t.Fatalf("user_version = %d, want 0", v)
+	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 1 {
+		t.Fatalf("user_version = %d, want 1", v)
 	}
 	if n := rawCount(t, DBPath(dir), `SELECT count(*) FROM beads WHERE short_id = 'abc'`); n != 1 {
 		t.Fatalf("beads rows = %d, want the row kept", n)
 	}
-	if v := rawCount(t, backup, `PRAGMA user_version`); v != 1 {
-		t.Fatalf("backup user_version = %d, want 1", v)
+	if v := rawCount(t, backup, `PRAGMA user_version`); v != 2 {
+		t.Fatalf("backup user_version = %d, want 2", v)
+	}
+	if n := rawCount(t, backup, `SELECT count(*) FROM beads WHERE short_id = 'abc'`); n != 1 {
+		t.Fatalf("backup beads rows = %d, want the row kept", n)
+	}
+	res, err = migrateToCurrent(t, dir)
+	if err != nil || res.From != 1 || res.To != 1 {
+		t.Fatalf("migrate to current after relabel: %+v, %v", res, err)
 	}
 	db, err := Open(t.Context(), dir, migrateOpts())
 	if err != nil {
@@ -428,7 +499,7 @@ func TestMigrateRelabelsPrePublicVersionOne(t *testing.T) {
 	_ = db.Close()
 }
 
-func TestMigrateRejectsPrePublicVersionOneWithOtherSchema(t *testing.T) {
+func TestMigrateRejectsUnpublishedVersionWithOtherSchema(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		stmt string
@@ -438,20 +509,20 @@ func TestMigrateRejectsPrePublicVersionOneWithOtherSchema(t *testing.T) {
 		{"extra trigger", `CREATE TRIGGER t_extra AFTER INSERT ON beads BEGIN SELECT 1; END`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := seedPrePublicVersionOne(t)
+			dir := seedUnpublishedVersionTwo(t)
 			raw := mustOpenRawAt(t, DBPath(dir))
 			if _, err := raw.ExecContext(t.Context(), tc.stmt); err != nil {
 				t.Fatal(err)
 			}
 			_ = raw.Close()
 
-			if _, err := Migrate(t.Context(), dir, migrateOpts()); !errors.Is(err, ErrSchemaTooNew) {
+			if _, err := migrateToCurrent(t, dir); !errors.Is(err, ErrSchemaTooNew) {
 				t.Fatalf("err = %v, want ErrSchemaTooNew", err)
 			}
-			if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 1 {
-				t.Fatalf("user_version = %d, want 1", v)
+			if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 2 {
+				t.Fatalf("user_version = %d, want 2", v)
 			}
-			if _, err := os.Stat(DBPath(dir) + ".bak-schema1"); err == nil {
+			if _, err := os.Stat(DBPath(dir) + ".bak-schema2"); err == nil {
 				t.Fatal("backup created for a rejected relabel")
 			}
 		})
@@ -459,20 +530,20 @@ func TestMigrateRejectsPrePublicVersionOneWithOtherSchema(t *testing.T) {
 }
 
 func TestMigrateRelabelStopsWhenBackupFails(t *testing.T) {
-	dir := seedPrePublicVersionOne(t)
-	if err := os.Symlink(filepath.Join(t.TempDir(), "missing", "x"), DBPath(dir)+".bak-schema1"); err != nil {
+	dir := seedUnpublishedVersionTwo(t)
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing", "x"), DBPath(dir)+".bak-schema2"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Migrate(t.Context(), dir, migrateOpts()); err == nil || !strings.Contains(err.Error(), "back up") {
+	if _, err := migrateToCurrent(t, dir); err == nil || !strings.Contains(err.Error(), "back up") {
 		t.Fatalf("err = %v, want a backup error", err)
 	}
-	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 1 {
-		t.Fatalf("user_version = %d, want 1", v)
+	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 2 {
+		t.Fatalf("user_version = %d, want 2", v)
 	}
 }
 
 func TestMigrateRelabelReportsCanceledContext(t *testing.T) {
-	dir := seedPrePublicVersionOne(t)
+	dir := seedUnpublishedVersionTwo(t)
 	db, err := openMigrateDB(dir, migrateOpts())
 	if err != nil {
 		t.Fatal(err)
@@ -480,7 +551,7 @@ func TestMigrateRelabelReportsCanceledContext(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := reshapePrePublic(ctx, db, dir, prePublicVersion); err == nil {
+	if _, err := relabelUnpublished(ctx, db, dir, 2, 1); err == nil {
 		t.Fatal("want an error from a canceled context")
 	}
 }
@@ -502,13 +573,13 @@ func TestMigrateRelabelReportsReferenceSchemaFailures(t *testing.T) {
 		}, "create reference schema"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := seedPrePublicVersionOne(t)
+			dir := seedUnpublishedVersionTwo(t)
 			referenceSQLOpen = tc.open
-			if _, err := Migrate(t.Context(), dir, migrateOpts()); err == nil || !strings.Contains(err.Error(), tc.want) {
+			if _, err := migrateToCurrent(t, dir); err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v, want %q", err, tc.want)
 			}
-			if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 1 {
-				t.Fatalf("user_version = %d, want 1", v)
+			if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 2 {
+				t.Fatalf("user_version = %d, want 2", v)
 			}
 		})
 	}
@@ -561,20 +632,20 @@ func seedPreRename(t *testing.T, version string) string {
 }
 
 func TestMigrateRenamesPrePublicSchema(t *testing.T) {
-	for _, version := range []string{"0", "1"} {
+	for _, version := range []string{"0"} {
 		t.Run("version "+version, func(t *testing.T) {
 			dir := seedPreRename(t, version)
 
-			res, err := Migrate(t.Context(), dir, migrateOpts())
+			res, err := migrateToCurrent(t, dir)
 			if err != nil {
 				t.Fatal(err)
 			}
 			backup := DBPath(dir) + ".bak-prerename"
-			if res.From != map[string]int{"0": 0, "1": 1}[version] || res.To != 0 || res.Backup != backup {
+			if res.From != 0 || res.To != 1 || res.Backup != DBPath(dir)+".bak-schema0" {
 				t.Fatalf("result = %+v", res)
 			}
-			if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 0 {
-				t.Fatalf("user_version = %d, want 0", v)
+			if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 1 {
+				t.Fatalf("user_version = %d, want 1", v)
 			}
 			if n := rawCount(t, DBPath(dir), `SELECT count(*) FROM beads WHERE reasoning_depth = 3 AND reasoning_depth_set_at = 'd1' AND redetect_key = 'k1' AND last_redetected_at = 's1' AND closed_at_set_at = 'c1'`); n != 1 {
 				t.Fatalf("renamed row count = %d, want the row kept under the new column names", n)
@@ -590,6 +661,9 @@ func TestMigrateRenamesPrePublicSchema(t *testing.T) {
 			_ = openWritable(t, freshDir).Close()
 			if got, want := mustSchemaShape(t, migrated), mustSchemaShape(t, mustOpenRaw(t, freshDir)); got != want {
 				t.Fatalf("renamed schema differs from schemaDDL:\nrenamed:\n%s\nfresh:\n%s", got, want)
+			}
+			if _, err := Migrate(t.Context(), dir, migrateOpts()); err != nil {
+				t.Fatalf("migrate to current after rename: %v", err)
 			}
 			db, err := Open(t.Context(), dir, migrateOpts())
 			if err != nil {
@@ -607,9 +681,11 @@ func TestMigrateLeavesUnknownVersionZeroSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = raw.Close()
-	res, err := Migrate(t.Context(), dir, migrateOpts())
-	if err != nil || res.From != 0 || res.To != 0 || res.Backup != "" {
-		t.Fatalf("result = %+v, err = %v, want a no-op", res, err)
+	if _, err := migrateToCurrent(t, dir); err == nil || !strings.Contains(err.Error(), "apply migration 1") {
+		t.Fatalf("err = %v, want the forward migration to fail and roll back", err)
+	}
+	if v := rawCount(t, DBPath(dir), `PRAGMA user_version`); v != 0 {
+		t.Fatalf("user_version = %d, want 0", v)
 	}
 	if n := rawCount(t, DBPath(dir), `SELECT count(*) FROM pragma_table_info('beads') WHERE name = 'dedupe_key'`); n != 1 {
 		t.Fatalf("dedupe_key columns = %d, want the unknown schema left alone", n)
@@ -622,7 +698,7 @@ func TestMigrateRenameStopsOnFailures(t *testing.T) {
 		if err := os.Symlink(filepath.Join(t.TempDir(), "missing", "x"), DBPath(dir)+".bak-prerename"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Migrate(t.Context(), dir, migrateOpts()); err == nil || !strings.Contains(err.Error(), "back up") {
+		if _, err := migrateToCurrent(t, dir); err == nil || !strings.Contains(err.Error(), "back up") {
 			t.Fatalf("err = %v, want a backup error", err)
 		}
 	})
@@ -630,7 +706,7 @@ func TestMigrateRenameStopsOnFailures(t *testing.T) {
 		orig := migrateBeginTx
 		t.Cleanup(func() { migrateBeginTx = orig })
 		migrateBeginTx = func(context.Context, *sql.DB) (*sql.Tx, error) { return nil, errors.New("injected") }
-		if _, err := Migrate(t.Context(), seedPreRename(t, "0"), migrateOpts()); err == nil || !strings.Contains(err.Error(), "begin rename") {
+		if _, err := migrateToCurrent(t, seedPreRename(t, "0")); err == nil || !strings.Contains(err.Error(), "begin rename") {
 			t.Fatalf("err = %v, want a begin rename error", err)
 		}
 	})
@@ -644,7 +720,7 @@ func TestMigrateRenameStopsOnFailures(t *testing.T) {
 			}
 			return db.BeginTx(ctx, nil)
 		}
-		if _, err := Migrate(t.Context(), dir, migrateOpts()); err == nil || !strings.Contains(err.Error(), "rename schema") {
+		if _, err := migrateToCurrent(t, dir); err == nil || !strings.Contains(err.Error(), "rename schema") {
 			t.Fatalf("err = %v, want a rename schema error", err)
 		}
 	})
@@ -660,7 +736,7 @@ func TestMigrateRenameStopsOnFailures(t *testing.T) {
 			}
 			return db, err
 		}
-		if _, err := Migrate(t.Context(), seedPreRename(t, "0"), migrateOpts()); err == nil || !strings.Contains(err.Error(), "pre-rename reference") {
+		if _, err := migrateToCurrent(t, seedPreRename(t, "0")); err == nil || !strings.Contains(err.Error(), "pre-rename reference") {
 			t.Fatalf("err = %v, want a pre-rename reference error", err)
 		}
 	})
@@ -675,8 +751,30 @@ func TestMigrateRenameStopsOnFailures(t *testing.T) {
 			}
 			return orig(driver, dsn)
 		}
-		if _, err := Migrate(t.Context(), seedPreRename(t, "0"), migrateOpts()); err == nil || !strings.Contains(err.Error(), "open reference schema") {
+		if _, err := migrateToCurrent(t, seedPreRename(t, "0")); err == nil || !strings.Contains(err.Error(), "open reference schema") {
 			t.Fatalf("err = %v, want an open reference schema error", err)
 		}
 	})
+}
+
+func migrateToCurrent(t *testing.T, dir string) (MigrateResult, error) {
+	t.Helper()
+	return Migrate(t.Context(), dir, migrateOpts())
+}
+
+func TestFoldedSchemaVersion(t *testing.T) {
+	if SchemaVersion != 1 {
+		t.Fatalf("SchemaVersion = %d, want 1", SchemaVersion)
+	}
+	entries, err := fs.ReadDir(migrationFiles, "migrations")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if got, want := strings.Join(names, ","), "0.sql,1.sql"; got != want {
+		t.Fatalf("migrations = %s, want %s", got, want)
+	}
 }

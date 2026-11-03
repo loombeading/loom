@@ -45,6 +45,9 @@ Usage: lm <command> [<subcommand>] [flags] [<args>]
 - gate sweep — Auto-resolve open Gates whose wait is already met (the Beads they block are all terminal)
 - ahead — Estimate token cost of Ready Beads and the courses that follow, against an optional budget
 - cost add — Add an input/output token cost record to a Bead
+- coefficient show — Show every coefficient with its value and the time it was set
+- coefficient set — Set one coefficient to a value, recording the change and its reason in the audit log
+- hold cancel — Cancel held severity 3-4 Beads whose hold has outlasted cancel_after, re-evaluating demand in the same transaction
 - rework add — Add a rework record to a Bead
 - ready — Enumerate Beads that are ready to start
 - blocked — Enumerate open Beads that are not ready, with their blockers
@@ -210,7 +213,7 @@ func TestMilestoneAbsentFromHelpAndCompletion(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("completion %s: exit code = %d", shell, code)
 		}
-		if strings.Contains(strings.ToLower(out), "milestone") {
+		if strings.Contains(strings.ToLower(strings.ReplaceAll(out, "no-milestone", "")), "milestone") {
 			t.Errorf("lm completion %s output contains \"milestone\"", shell)
 		}
 	}
@@ -238,6 +241,38 @@ func TestCompletionUnknownShell(t *testing.T) {
 	}
 	if errS == "" {
 		t.Errorf("completion fish: stderr empty, want an error message")
+	}
+}
+
+func TestCompletionHelp(t *testing.T) {
+	for _, args := range [][]string{
+		{"help", "completion"},
+		{"help", "completion", "zsh"},
+		{"completion", "--help"},
+	} {
+		out, errS, code := runCmd(t, args, "")
+		if code != 0 {
+			t.Errorf("lm %s: exit code = %d, want 0", strings.Join(args, " "), code)
+		}
+		if out != "" {
+			t.Errorf("lm %s: stdout = %q, want empty", strings.Join(args, " "), out)
+		}
+		if !strings.Contains(errS, "Usage: lm completion") {
+			t.Errorf("lm %s: stderr = %q, want Usage line", strings.Join(args, " "), errS)
+		}
+	}
+}
+
+func TestCompletionHelpStopsAtDoubleDash(t *testing.T) {
+	out, errS, code := runCmd(t, []string{"completion", "--", "--help"}, "")
+	if code != 1 {
+		t.Errorf("completion -- --help: exit code = %d, want 1", code)
+	}
+	if out != "" {
+		t.Errorf("completion -- --help: stdout = %q, want empty", out)
+	}
+	if strings.Contains(errS, "Usage: lm completion") {
+		t.Errorf("completion -- --help: stderr = %q, want no Usage line", errS)
 	}
 }
 

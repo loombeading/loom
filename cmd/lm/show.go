@@ -26,7 +26,7 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	fs.Usage = helpUsage(fs)
 	allDeps := fs.Bool("all-deps", false, "include removed dependency links")
-	full := fs.Bool("full", false, "show the full description instead of its compacted summary")
+	full := fs.Bool("full", false, "show the full description instead of its compacted summary, and history values without truncation")
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
 		return helpExitCode(err)
 	}
@@ -107,8 +107,8 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	var effectiveSource string
-	if raised && effective.Source == domain.SourceExpedite {
-		effectiveSource = domain.SourceExpedite
+	if raised && isLiteralSource(effective.Source) {
+		effectiveSource = effective.Source
 	} else if raised {
 		resolver, err := domain.NewAliasResolverFor(ctx, db.SQL, []string{effective.Source})
 		if err != nil {
@@ -173,6 +173,13 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 	}
 	output.WriteDescription(stdout, compacted, bead.Description.Valid, bead.Description.String, bead.Summary.String, retentionDays)
 
+	if !domain.IsTerminalStatus(bead.Status) {
+		if err := writePriority(ctx, stdout, db.SQL, n, now, bead, displayID); err != nil {
+			output.WriteError(stderr, err.Error())
+			return 1
+		}
+	}
+
 	targets, err := linkTargetsFor(ctx, db.SQL, n, links, sentLinks, history)
 	if err != nil {
 		output.WriteError(stderr, err.Error())
@@ -199,7 +206,7 @@ func runShow(args []string, stdout, stderr io.Writer) int {
 	}
 
 	fmt.Fprintln(stdout, "## History")
-	output.WriteHistory(stdout, historyRows(history, targets))
+	output.WriteHistory(stdout, historyRows(history, targets, *full))
 
 	return 0
 }
@@ -440,7 +447,7 @@ func discoveredFromSentRows(sentLinks []domain.DepRow, targets map[string]linkTa
 	return rows
 }
 
-func historyRows(history []domain.AuditRow, targets map[string]linkTarget) []output.HistoryRow {
+func historyRows(history []domain.AuditRow, targets map[string]linkTarget, full bool) []output.HistoryRow {
 	if len(history) == 0 {
 		return nil
 	}
@@ -473,12 +480,16 @@ func historyRows(history []domain.AuditRow, targets map[string]linkTarget) []out
 	}
 
 	for _, h := range history[start:] {
-		rows = append(rows, historyRow(h, targets))
+		rows = append(rows, historyRow(h, targets, full))
 	}
 	return rows
 }
 
-func historyRow(h domain.AuditRow, targets map[string]linkTarget) output.HistoryRow {
+func historyRow(h domain.AuditRow, targets map[string]linkTarget, full bool) output.HistoryRow {
+	truncate := output.TruncateValue
+	if full {
+		truncate = func(s string) (string, bool) { return output.Escape(s), false }
+	}
 	r := output.HistoryRow{
 		Time:  h.OccurredAt,
 		Actor: h.Actor,
@@ -501,12 +512,12 @@ func historyRow(h domain.AuditRow, targets map[string]linkTarget) output.History
 				value = fmt.Sprintf("%s ← %s", dv.Type, display)
 			}
 		}
-		r.Value, r.Cut = output.TruncateValue(value)
+		r.Value, r.Cut = truncate(value)
 	}
 	if h.Reason.Valid && h.Reason.String != "" {
 		r.HasReason = true
 		var cut bool
-		r.Reason, cut = output.TruncateValue(h.Reason.String)
+		r.Reason, cut = truncate(h.Reason.String)
 		r.Cut = r.Cut || cut
 	}
 	return r
@@ -536,7 +547,7 @@ func pickupLine(ctx context.Context, q domain.Querier, bead domain.Bead, now tim
 	if err != nil {
 		return "", err
 	}
-	closedTotal, closedWithPR := closeVelocityCounts(throughput, now, releaseWindowHours)
+	closedTotal, closedWithPR := closeVelocityCounts(throughput, now)
 	etas := estimate.ReleaseETA(now, releaseWindowHours, closedTotal, closedWithPR,
 		[]estimate.ReleaseWindow{{Remaining: ahead, Created: interrupts}})
 	return formatPickup(ahead, etas[0]), nil

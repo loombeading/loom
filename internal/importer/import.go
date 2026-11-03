@@ -19,6 +19,11 @@ import (
 )
 
 const (
+	scanInitialBuf = 64 * 1024
+	scanMaxBuf     = 64 * 1024 * 1024
+)
+
+const (
 	colStatus         = "status"
 	colBeadType       = "type"
 	colReasoningDepth = "reasoning_depth"
@@ -110,7 +115,7 @@ func Run(ctx context.Context, tx *sql.Tx, r io.Reader, opt Options) (*Summary, e
 	skipped := 0
 
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	sc.Buffer(make([]byte, 0, scanInitialBuf), scanMaxBuf)
 	lineNo := 0
 	for sc.Scan() {
 		lineNo++

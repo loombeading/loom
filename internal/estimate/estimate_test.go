@@ -271,6 +271,47 @@ func TestFmtK(t *testing.T) {
 	}
 }
 
+func TestMilestoneTokens(t *testing.T) {
+	closedItem := func(tokens int, est float64) TokenItem {
+		return TokenItem{Status: "closed", Tokens: tokens, Est: est, HasEst: true}
+	}
+	cases := []struct {
+		name  string
+		items []TokenItem
+		want  string
+	}{
+		{"no items", nil, "spent=0 est_remaining=0 burn=n/a ratio=n/a"},
+		{"unfinished without estimates", []TokenItem{{Status: "open"}}, "spent=0 est_remaining=n/a burn=n/a ratio=n/a"},
+		{"consumed amount is subtracted", []TokenItem{
+			{Status: "in_progress", Tokens: 4000, Est: 10000, HasEst: true},
+			{Status: "open", Est: 10000, HasEst: true},
+		}, "spent=4.00k est_remaining=16.0k burn=20% ratio=n/a"},
+		{"overrun clamps to zero", []TokenItem{{Status: "in_progress", Tokens: 15000, Est: 10000, HasEst: true}}, "spent=15.0k est_remaining=0 burn=100% ratio=n/a"},
+		{"some unfinished lack estimates", []TokenItem{
+			{Status: "open", Est: 6000, HasEst: true},
+			{Status: "open"},
+		}, "spent=0 est_remaining=6.00k burn=0% ratio=n/a"},
+		{"two closed are too few for ratio", []TokenItem{closedItem(10000, 5000), closedItem(10000, 5000)}, "spent=20.0k est_remaining=0 burn=100% ratio=n/a"},
+		{"three closed give ratio", []TokenItem{closedItem(10000, 5000), closedItem(10000, 5000), closedItem(10000, 5000)}, "spent=30.0k est_remaining=0 burn=100% ratio=2.00"},
+		{"cancelled counts as spent but not ratio", []TokenItem{
+			closedItem(10000, 10000), closedItem(10000, 10000), closedItem(10000, 10000),
+			{Status: "cancelled", Tokens: 6000, Est: 1, HasEst: true},
+		}, "spent=36.0k est_remaining=0 burn=100% ratio=1.00"},
+		{"closed without tokens or estimate is not sampled", []TokenItem{
+			closedItem(10000, 10000), closedItem(10000, 10000),
+			{Status: "closed", Est: 10000, HasEst: true},
+			{Status: "closed", Tokens: 10000},
+		}, "spent=30.0k est_remaining=0 burn=100% ratio=n/a"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := MilestoneTokens(c.items).String(); got != c.want {
+				t.Errorf("MilestoneTokens(%s) = %q, want %q", c.name, got, c.want)
+			}
+		})
+	}
+}
+
 func mustParseDay(t *testing.T, s string) time.Time {
 	t.Helper()
 	tm, err := time.Parse("2006-01-02", s)

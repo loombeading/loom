@@ -792,18 +792,18 @@ func TestAcceptanceMultiIDClosePartialRejectionShowsIDsAndReasons(t *testing.T) 
 	gate := mustCreateBead(t, "--title", "g", "--type", "gate", "--label", "kind:human")
 	okAlias := mustDisplayAlias(t, ok)
 
-	out, _, code := runCmd(t, []string{"close", ok, gate}, "")
+	out, errS, code := runCmd(t, []string{"close", ok, gate}, "")
 	if code != 1 {
 		t.Fatalf("close [ok, gate]: exit code = %d, want 1", code)
 	}
 	if !strings.Contains(out, "- Closed: "+okAlias) {
 		t.Errorf("close output = %q, want the ok Bead marked closed", out)
 	}
-	if !strings.Contains(out, gate) {
-		t.Errorf("close output = %q, want the rejected gate's ID shown", out)
+	if !strings.Contains(errS, gate) {
+		t.Errorf("close stderr = %q, want the rejected gate's ID shown", errS)
 	}
-	if !strings.Contains(out, "Rejected:") {
-		t.Errorf("close output = %q, want a rejection reason shown", out)
+	if !strings.Contains(errS, "Rejected:") {
+		t.Errorf("close stderr = %q, want a rejection reason shown", errS)
 	}
 	showOut, _, code := runCmd(t, []string{"show", ok}, "")
 	if code != 0 {

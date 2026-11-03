@@ -178,6 +178,18 @@ func UpdateBead(ctx context.Context, tx *sql.Tx, in UpdateInput) ([]string, erro
 	return warnings, nil
 }
 
+func UpdateBeadAutoResolve(ctx context.Context, tx *sql.Tx, in UpdateInput) ([]string, []string, error) {
+	warnings, err := UpdateBead(ctx, tx, in)
+	if err != nil || !in.Cancel {
+		return warnings, nil, err
+	}
+	resolved, err := AutoResolveGatesForBead(ctx, tx, in.ID, in.Actor, in.Now)
+	if err != nil {
+		return nil, nil, err
+	}
+	return warnings, resolved, nil
+}
+
 func applyTransition(ctx context.Context, tx *sql.Tx, in UpdateInput, row beadRow, sets map[string]any) ([]AuditRecord, error) {
 	switch {
 	case in.Claim:
@@ -194,7 +206,7 @@ func applyTransition(ctx context.Context, tx *sql.Tx, in UpdateInput, row beadRo
 
 func applyClaim(ctx context.Context, tx *sql.Tx, in UpdateInput, row beadRow, sets map[string]any) ([]AuditRecord, error) {
 	if row.beadType == BeadTypeGate {
-		return nil, &ValidationError{Msg: "gate Beads cannot be claimed; a Gate is a wait primitive, not something to work on (use `lm gate resolve` to unblock its waiters)"}
+		return nil, &ValidationError{Msg: "gate Beads cannot be claimed; a Gate is a wait primitive, not something to work on (use lm gate resolve to unblock its waiters)"}
 	}
 	clock := in.Clock
 	if clock.IsZero() {
@@ -343,7 +355,7 @@ func applyScalarFields(in UpdateInput, beadType string, sets map[string]any) ([]
 			return nil, &ValidationError{Msg: fmt.Sprintf("invalid type %q", in.Type)}
 		}
 		if (beadType == BeadTypeGate) != (in.Type == BeadTypeGate) {
-			return nil, &ValidationError{Msg: fmt.Sprintf("cannot change type from %q to %q; a Gate is created with `lm gate create` and ended with `lm gate resolve`/`lm gate reject`", beadType, in.Type)}
+			return nil, &ValidationError{Msg: fmt.Sprintf("cannot change type from %q to %q; a Gate is created with lm gate create and ended with lm gate resolve or lm gate reject", beadType, in.Type)}
 		}
 		set("type", in.Type, in.Type)
 	}
@@ -638,7 +650,7 @@ func CloseBead(ctx context.Context, tx *sql.Tx, in CloseInput) error {
 		return err
 	}
 	if beadType == BeadTypeGate {
-		return &ValidationError{Msg: "gate Beads cannot be closed directly; use `lm gate resolve` (P4)"}
+		return ErrGateTerminalOnlyResolve
 	}
 	if !CanTransition(status, StatusClosed) {
 		return &ValidationError{Msg: fmt.Sprintf("cannot close a Bead in status %q", status)}

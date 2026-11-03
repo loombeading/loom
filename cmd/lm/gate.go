@@ -179,7 +179,7 @@ func runGateCreate(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	return 0
 }
 
-func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx, id, reason, actor, now string) ([]string, error), args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx, id, reason, actor, now string) (domain.GateRejectResult, error), args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("gate "+sub, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = helpUsage(fs)
@@ -232,7 +232,8 @@ func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx,
 		}
 
 		var namespace string
-		var cancelled []string
+		var result domain.GateRejectResult
+		var autoResolved []idAndNamespace
 		var newly []string
 		err = db.WithWrite(ctx, func(tx *sql.Tx) error {
 			var perr error
@@ -243,7 +244,11 @@ func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx,
 			var derr error
 			newly, derr = domain.NewlyReadyDiff(ctx, tx, func() error {
 				var cerr error
-				cancelled, cerr = apply(ctx, tx, id, reasonVal, actorVal, now)
+				result, cerr = apply(ctx, tx, id, reasonVal, actorVal, now)
+				if cerr != nil {
+					return cerr
+				}
+				autoResolved, cerr = withNamespaces(ctx, tx, result.AutoResolved)
 				return cerr
 			})
 			return derr
@@ -261,7 +266,10 @@ func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx,
 			continue
 		}
 		fmt.Fprintf(stdout, "- %s: %s\n", verb, output.EscapeInline(domain.DisplayID(namespace, id, n)))
-		cancelledIDs = append(cancelledIDs, cancelled...)
+		for _, g := range autoResolved {
+			fmt.Fprintf(stdout, "- Auto-resolved: %s\n", output.EscapeInline(domain.DisplayID(g.Namespace, g.ID, n)))
+		}
+		cancelledIDs = append(cancelledIDs, result.Cancelled...)
 		for _, nid := range newly {
 			newlyReadyIDs[nid] = true
 		}
@@ -284,20 +292,20 @@ func runGateChange(sub, verb string, apply func(ctx context.Context, tx *sql.Tx,
 }
 
 func runGateResolve(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	apply := func(ctx context.Context, tx *sql.Tx, id, reason, actor, now string) ([]string, error) {
+	apply := func(ctx context.Context, tx *sql.Tx, id, reason, actor, now string) (domain.GateRejectResult, error) {
 		err := domain.GateResolve(ctx, tx, domain.GateResolveInput{
 			ID:     id,
 			Reason: reason,
 			Actor:  actor,
 			Now:    now,
 		})
-		return nil, err
+		return domain.GateRejectResult{}, err
 	}
 	return runGateChange("resolve", "Resolved", apply, args, stdin, stdout, stderr)
 }
 
 func runGateReject(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	apply := func(ctx context.Context, tx *sql.Tx, id, reason, actor, now string) ([]string, error) {
+	apply := func(ctx context.Context, tx *sql.Tx, id, reason, actor, now string) (domain.GateRejectResult, error) {
 		return domain.GateReject(ctx, tx, domain.GateRejectInput{
 			ID:     id,
 			Reason: reason,
@@ -492,7 +500,7 @@ func filterGatesByNamespace(entries []domain.GateListEntry, namespace string) []
 func partitionGates(entries []domain.GateListEntry) map[string][]domain.GateListEntry {
 	bySec := make(map[string][]domain.GateListEntry)
 	for _, e := range entries {
-		sec := gateSectionOf(e)
+		sec := waitlabel.GateSectionOf(e)
 		bySec[sec] = append(bySec[sec], e)
 	}
 	return bySec
@@ -566,52 +574,12 @@ func writeGateEntry(stdout io.Writer, sec gateSection, e domain.GateListEntry, n
 }
 
 const (
-	gateSecHuman      = "human"
-	gateSecPrereq     = "prereq"
-	gateSecAdjudicate = "adjudicate"
-	gateSecExternal   = "external"
-	gateSecUnknown    = "unknown"
+	gateSecHuman      = waitlabel.GateSectionHuman
+	gateSecPrereq     = waitlabel.GateSectionPrereq
+	gateSecAdjudicate = waitlabel.GateSectionAdjudicate
+	gateSecExternal   = waitlabel.GateSectionExternal
+	gateSecUnknown    = waitlabel.GateSectionUnknown
 )
-
-func gateSectionOf(e domain.GateListEntry) string {
-	kind := domain.GateKindOf(e.Labels, e.Fields.Subject)
-	if kind == domain.GateKindHuman && len(unknownWaitLabels(e.Labels)) > 0 {
-		return gateSecUnknown
-	}
-	if len(gateProbeLabels(e.Labels, kind)) > 0 {
-		return gateSecExternal
-	}
-	switch kind {
-	case domain.GateKindHuman:
-		if len(e.PrereqBlockers) > 0 {
-			return gateSecPrereq
-		}
-		return gateSecHuman
-	case domain.GateKindAdjudicate:
-		return gateSecAdjudicate
-	case domain.GateKindExternal:
-		return gateSecExternal
-	default:
-		return gateSecUnknown
-	}
-}
-
-func gateProbeLabels(labels []string, kind string) []string {
-	var probes []string
-	for _, l := range labels {
-		if !waitlabel.IsProbe(l) {
-			continue
-		}
-		if (kind == domain.GateKindAdjudicate || kind == domain.GateKindHuman) && waitlabel.WaitsOnPerson(l) {
-			continue
-		}
-		if kind == domain.GateKindHuman && strings.HasPrefix(l, waitlabel.File.Prefix()) {
-			continue
-		}
-		probes = append(probes, l)
-	}
-	return probes
-}
 
 func gateLine(e domain.GateListEntry, resolver *domain.AliasResolver, graph map[string]domain.EstimateBead, vias []gateVia, eff map[string]domain.EffectivePriority, effSources map[string]string, n domain.ShortIDs) (string, error) {
 	gateID := output.EscapeInline(domain.DisplayID(e.Namespace, e.ID, n))
@@ -739,26 +707,16 @@ func gateAutoOpenAux(resolver *domain.AliasResolver, n domain.ShortIDs, progress
 			}
 			lines = append(lines, line)
 		}
-		for _, l := range gateProbeLabels(e.Labels, domain.GateKindOf(e.Labels, e.Fields.Subject)) {
+		for _, l := range waitlabel.GateProbeLabels(e.Labels, domain.GateKindOf(e.Labels, e.Fields.Subject)) {
 			lines = append(lines, "  - Waiting for: "+output.Escape(l))
 		}
 		return lines, nil
 	}
 }
 
-func unknownWaitLabels(labels []string) []string {
-	var unknown []string
-	for _, l := range labels {
-		if waitlabel.IsUnknown(l) {
-			unknown = append(unknown, l)
-		}
-	}
-	return unknown
-}
-
 func gateUnknownAux(e domain.GateListEntry, gateID string) ([]string, error) {
 	if domain.GateKindOf(e.Labels, e.Fields.Subject) == domain.GateKindHuman {
-		if unknown := unknownWaitLabels(e.Labels); len(unknown) > 0 {
+		if unknown := waitlabel.UnknownWaitLabels(e.Labels); len(unknown) > 0 {
 			return []string{"  - Fix: unknown wait label: " + output.Escape(strings.Join(unknown, ", "))}, nil
 		}
 	}

@@ -117,7 +117,8 @@ func runCreate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	ctx := domain.WithStaleIDNotice(context.Background(), stderr)
 	var newID, seenID string
-	var blocked bytes.Buffer
+	var blocked, ready bytes.Buffer
+	var heldOn bool
 	err = db.WithWrite(ctx, func(tx *sql.Tx) error {
 		if *redetectKey != "" {
 			id, err := domain.RedetectKey(ctx, tx, namespace, *redetectKey, actorVal, reasonVal, now)
@@ -161,13 +162,32 @@ func runCreate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if *parent == "" && len(blockedBy) == 0 {
 			return create()
 		}
-		dropped, err := droppedFromReady(ctx, tx, create)
-		if err != nil || len(dropped) == 0 {
+		var released []string
+		write := create
+		if *parent != "" {
+			write = func() error {
+				parentID, perr := domain.ResolveID(ctx, tx, *parent)
+				if perr != nil {
+					return perr
+				}
+				var herr error
+				released, heldOn, herr = domain.HeldReleased(ctx, tx, effNow(), []string{parentID}, create)
+				return herr
+			}
+		}
+		dropped, err := droppedFromReady(ctx, tx, write)
+		if err != nil || (len(dropped) == 0 && !heldOn) {
 			return err
 		}
 		n, err := domain.LoadShortIDs(ctx, tx)
 		if err != nil {
 			return err
+		}
+		if heldOn {
+			fmt.Fprintln(&ready)
+			if err := writeNewlyReady(ctx, tx, &ready, n, idSet(released), cfg.NamespaceDefault); err != nil {
+				return err
+			}
 		}
 		return writeNewlyBlocked(ctx, tx, &blocked, n, dropped, cfg.NamespaceDefault)
 	})
@@ -210,6 +230,7 @@ func runCreate(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if *beadType != domain.BeadTypeGate {
 		writeSimilar(context.Background(), stdout, stderr, db.SQL, namespace, *title, newID, n)
 	}
+	_, _ = ready.WriteTo(stdout)
 	_, _ = blocked.WriteTo(stdout)
 	if *discoveredFrom != "" {
 		srcID, _ := domain.ResolveID(context.Background(), db.SQL, *discoveredFrom)
@@ -236,10 +257,13 @@ func similarLines(ctx context.Context, q domain.Querier, namespace, title, newID
 		return nil, err
 	}
 	beads := make([]domain.Bead, len(matches))
-	ids := make([]string, len(matches))
+	ids := make([]string, 0, 2*len(matches))
 	for i, m := range matches {
 		beads[i] = m.Bead
-		ids[i] = m.Bead.ID
+		ids = append(ids, m.Bead.ID)
+		if m.Milestone != "" {
+			ids = append(ids, m.Milestone)
+		}
 	}
 	resolver, err := domain.NewAliasResolverFor(ctx, q, ids)
 	if err != nil {
@@ -249,9 +273,27 @@ func similarLines(ctx context.Context, q domain.Querier, namespace, title, newID
 	if err != nil {
 		return nil, err
 	}
-	lines := make([]string, len(rows))
+	lines := make([]string, 0, len(rows)+1)
+	affiliated := false
 	for i, r := range rows {
-		lines[i] = fmt.Sprintf("%s  match=%d/%d", output.BeadLine(r), matches[i].K, matches[i].N)
+		lines = append(lines, fmt.Sprintf("%s  match=%d/%d", output.BeadLine(r), matches[i].K, matches[i].N))
+		if ms := matches[i].Milestone; ms != "" {
+			msID, err := aliasOrDisplayID(resolver, matches[i].MilestoneNamespace, ms, n)
+			if err != nil {
+				return nil, err
+			}
+			lines[i] += "  milestone=" + msID
+			affiliated = true
+		}
+	}
+	if affiliated {
+		exempt, err := domain.MilestoneExempt(ctx, q, newID)
+		if err != nil {
+			return nil, err
+		}
+		if exempt {
+			lines = append(lines, "- Hint: 所属するマイルストーンの候補がある。範囲内の作業なら lm dep add <新しい Bead> <Epic> --type parent-child で付け替える")
+		}
 	}
 	return lines, nil
 }

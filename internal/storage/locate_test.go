@@ -73,6 +73,25 @@ func TestLocateXDGDataHomeDefault(t *testing.T) {
 	}
 }
 
+func TestLocateIgnoresRelativeXDGDataHome(t *testing.T) {
+	home := t.TempDir()
+	defaultDir := filepath.Join(home, ".local", "share", "loom")
+	if err := os.MkdirAll(defaultDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, via, err := Locate(envMap(map[string]string{"XDG_DATA_HOME": "relative", "HOME": home}))
+	if err != nil {
+		t.Fatalf("Locate: %v", err)
+	}
+	if got != defaultDir {
+		t.Fatalf("dir = %q, want %q", got, defaultDir)
+	}
+	if via != "default" {
+		t.Fatalf("via = %q, want default", via)
+	}
+}
+
 func TestLocateDoesNotSearchCWD(t *testing.T) {
 	home := t.TempDir()
 	cwd := t.TempDir()

@@ -136,7 +136,7 @@ func closeAndReport(ctx context.Context, db *storage.DB, req closeRequest, raw s
 		if reportIfBusy(stderr, db.BusyTimeoutMS, err) {
 			return 1, true
 		}
-		if !reportIfReadOnly(stderr, raw, err) {
+		if !reportIfReadOnly(stderr, raw, err) && !reportIfGateTerminal(stderr, raw, err) {
 			writeRejected(stdout, stderr, raw, err)
 		}
 		return 1, false
@@ -202,15 +202,19 @@ func closeBeadTx(ctx context.Context, tx *sql.Tx, req closeRequest, id string) (
 	if err != nil {
 		return nil, err
 	}
-	var gates []idAndNamespace
-	for _, gateID := range gateIDs {
-		gateNamespace, err := namespaceOf(ctx, tx, gateID)
+	return withNamespaces(ctx, tx, gateIDs)
+}
+
+func withNamespaces(ctx context.Context, q domain.Querier, ids []string) ([]idAndNamespace, error) {
+	var out []idAndNamespace
+	for _, id := range ids {
+		namespace, err := namespaceOf(ctx, q, id)
 		if err != nil {
 			return nil, err
 		}
-		gates = append(gates, idAndNamespace{ID: gateID, Namespace: gateNamespace})
+		out = append(out, idAndNamespace{ID: id, Namespace: namespace})
 	}
-	return gates, nil
+	return out, nil
 }
 
 func derivedOpenDisplayIDs(ctx context.Context, q domain.Querier, id string, n domain.ShortIDs) ([]string, error) {

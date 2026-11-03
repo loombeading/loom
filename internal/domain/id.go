@@ -12,6 +12,11 @@ import (
 
 const CanonicalIDLen = 26
 
+const (
+	crockfordGroupBits = 5
+	crockfordGroupMask = 1<<crockfordGroupBits - 1
+)
+
 const crockfordAlphabet = "0123456789abcdefghjkmnpqrstvwxyz"
 
 var crockfordIndex = func() map[byte]byte {
@@ -27,12 +32,12 @@ func EncodeCrockford128(b [16]byte) string {
 	n.Lsh(n, 2)
 
 	out := make([]byte, CanonicalIDLen)
-	mask := big.NewInt(0x1f)
+	mask := big.NewInt(crockfordGroupMask)
 	group := new(big.Int)
 	for i := CanonicalIDLen - 1; i >= 0; i-- {
 		group.And(n, mask)
 		out[i] = crockfordAlphabet[group.Int64()]
-		n.Rsh(n, 5)
+		n.Rsh(n, crockfordGroupBits)
 	}
 	return string(out)
 }

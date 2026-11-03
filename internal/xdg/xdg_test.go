@@ -68,6 +68,19 @@ func TestConfigHomeXDGOverride(t *testing.T) {
 	}
 }
 
+func TestConfigHomeIgnoresRelativeOverride(t *testing.T) {
+	got, via, err := ConfigHome(envMap(map[string]string{"XDG_CONFIG_HOME": "relative", "HOME": "/home/u"}), "loom")
+	if err != nil {
+		t.Fatalf("ConfigHome: %v", err)
+	}
+	if got != "/home/u/.config/loom" {
+		t.Fatalf("dir = %q, want /home/u/.config/loom", got)
+	}
+	if via != "default" {
+		t.Fatalf("via = %q, want default", via)
+	}
+}
+
 func TestConfigHomeDefault(t *testing.T) {
 	got, via, err := ConfigHome(envMap(map[string]string{"HOME": "/home/u"}), "loom")
 	if err != nil {

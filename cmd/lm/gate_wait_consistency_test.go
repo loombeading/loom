@@ -195,11 +195,11 @@ func TestGateSectionOfKeepsPersonWaits(t *testing.T) {
 				want = tc.own
 			}
 			e := domain.GateListEntry{Labels: []string{tc.kind, l}, PrereqBlockers: tc.prereq}
-			if got := gateSectionOf(e); got != want {
+			if got := waitlabel.GateSectionOf(e); got != want {
 				t.Errorf("%s (prereq=%d) + %s: section = %q, want %q", tc.kind, len(tc.prereq), l, got, want)
 			}
 			e.Labels = append(e.Labels, waitlabel.PRMerged.Prefix()+"u")
-			if got := gateSectionOf(e); want == gateSecExternal && got != gateSecExternal {
+			if got := waitlabel.GateSectionOf(e); want == gateSecExternal && got != gateSecExternal {
 				t.Errorf("%s (prereq=%d) + %s + wait:pr-merged: section = %q, want %q", tc.kind, len(tc.prereq), l, got, gateSecExternal)
 			}
 		}
@@ -218,7 +218,7 @@ func TestGateSectionOfUnknownWaitLabel(t *testing.T) {
 			for _, extra := range [][]string{nil, {waitlabel.PRMerged.Prefix() + "u"}, {waitlabel.Date.Prefix() + "2026-10-01"}, {waitlabel.Any}} {
 				labels := append([]string{kind, "wait:runners-online:o"}, extra...)
 				e := domain.GateListEntry{Labels: labels, PrereqBlockers: p}
-				if got := gateSectionOf(e); got != gateSecUnknown {
+				if got := waitlabel.GateSectionOf(e); got != gateSecUnknown {
 					t.Errorf("%v (prereq=%d): section = %q, want %q", labels, len(p), got, gateSecUnknown)
 				}
 			}
@@ -230,7 +230,7 @@ func TestGateSectionOfUnknownWaitLabel(t *testing.T) {
 		{"kind:human", waitlabel.Any}:                gateSecHuman,
 	} {
 		e := domain.GateListEntry{Labels: labels[:]}
-		if got := gateSectionOf(e); got != want {
+		if got := waitlabel.GateSectionOf(e); got != want {
 			t.Errorf("%v: section = %q, want %q", labels, got, want)
 		}
 	}

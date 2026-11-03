@@ -14,6 +14,15 @@ import (
 
 const MinSamples = 3
 
+const (
+	percentScale     = 100.0
+	oneDecimalBelow  = 10
+	decimalBase      = 10
+	roundHalf        = 0.5
+	quartileLowerPct = 25
+	quartileUpperPct = 75
+)
+
 type Bead struct {
 	ID        string
 	Title     string
@@ -59,7 +68,7 @@ func Percentile(sortedValues []int, pct float64) (float64, bool) {
 	if len(sortedValues) == 1 {
 		return float64(sortedValues[0]), true
 	}
-	k := float64(len(sortedValues)-1) * (pct / 100.0)
+	k := float64(len(sortedValues)-1) * (pct / percentScale)
 	f := math.Floor(k)
 	c := math.Ceil(k)
 	if f == c {
@@ -140,6 +149,72 @@ func PerBeadActual(entries []CostEntry, resetAt time.Time) (float64, int, bool) 
 	return median(totals), len(totals), true
 }
 
+type TokenItem struct {
+	Status string
+	Tokens int
+	Est    float64
+	HasEst bool
+}
+
+type TokenBurn struct {
+	Spent           int
+	EstRemaining    float64
+	HasEstRemaining bool
+	Burn            int
+	HasBurn         bool
+	Ratio           float64
+	HasRatio        bool
+}
+
+func MilestoneTokens(items []TokenItem) TokenBurn {
+	var out TokenBurn
+	unfinished, unfinishedWithEst := 0, 0
+	closedTokens, closedEst, closedN := 0, 0.0, 0
+	for _, it := range items {
+		out.Spent += it.Tokens
+		switch it.Status {
+		case "open", "in_progress":
+			unfinished++
+			if it.HasEst {
+				unfinishedWithEst++
+				out.EstRemaining += math.Max(it.Est-float64(it.Tokens), 0)
+			}
+		case "closed":
+			if it.Tokens > 0 && it.HasEst {
+				closedN++
+				closedTokens += it.Tokens
+				closedEst += it.Est
+			}
+		}
+	}
+	out.HasEstRemaining = unfinished == 0 || unfinishedWithEst > 0
+	if out.HasEstRemaining {
+		if denom := float64(out.Spent) + out.EstRemaining; denom > 0 {
+			out.HasBurn = true
+			out.Burn = int(math.Floor(100 * float64(out.Spent) / denom))
+		}
+	}
+	if closedN >= MinSamples && closedEst > 0 {
+		out.HasRatio = true
+		out.Ratio = float64(closedTokens) / closedEst
+	}
+	return out
+}
+
+func (b TokenBurn) String() string {
+	estRemaining, burn, ratio := "n/a", "n/a", "n/a"
+	if b.HasEstRemaining {
+		estRemaining = FmtK(b.EstRemaining)
+	}
+	if b.HasBurn {
+		burn = strconv.Itoa(b.Burn) + "%"
+	}
+	if b.HasRatio {
+		ratio = strconv.FormatFloat(b.Ratio, 'f', 2, 64)
+	}
+	return "spent=" + FmtK(float64(b.Spent)) + " est_remaining=" + estRemaining + " burn=" + burn + " ratio=" + ratio
+}
+
 func FmtK(tokens float64) string {
 	if tokens < 0 {
 		return "-" + FmtK(-tokens)
@@ -154,10 +229,10 @@ func FmtK(tokens float64) string {
 		decimals := 2
 		if v >= 100 {
 			decimals = 0
-		} else if v >= 10 {
+		} else if v >= oneDecimalBelow {
 			decimals = 1
 		}
-		scale := math.Pow(10, float64(decimals))
+		scale := math.Pow(decimalBase, float64(decimals))
 		r := pythonRound(v*scale) / scale
 		if r >= 1000 && i < len(units)-1 {
 			continue
@@ -173,9 +248,9 @@ func pythonRound(x float64) float64 {
 	floor := math.Floor(x)
 	diff := x - floor
 	switch {
-	case diff < 0.5:
+	case diff < roundHalf:
 		return floor
-	case diff > 0.5:
+	case diff > roundHalf:
 		return floor + 1
 	default:
 		if math.Mod(floor, 2) == 0 {
@@ -374,8 +449,8 @@ func RenderCalibration(byTypePrio map[TypePrioKey][]int, all []int) []string {
 func calibrationRow(col1, col2 string, values []int) string {
 	sv := append([]int(nil), values...)
 	slices.Sort(sv)
-	p25, _ := Percentile(sv, 25)
-	p75, _ := Percentile(sv, 75)
+	p25, _ := Percentile(sv, quartileLowerPct)
+	p75, _ := Percentile(sv, quartileUpperPct)
 	return fmt.Sprintf("| %s | %s | %d | %s | %s | %s |",
 		col1, col2, len(sv), FmtK(median(sv)), FmtK(p25), FmtK(p75))
 }
@@ -433,8 +508,8 @@ func RenderDepthCalibration(byDepth map[int][]int, all []int) []string {
 func depthCalibrationRow(label string, values []int) string {
 	sv := append([]int(nil), values...)
 	slices.Sort(sv)
-	p25, _ := Percentile(sv, 25)
-	p75, _ := Percentile(sv, 75)
+	p25, _ := Percentile(sv, quartileLowerPct)
+	p75, _ := Percentile(sv, quartileUpperPct)
 	return fmt.Sprintf("| %s | %d | %s | %s | %s |",
 		label, len(sv), FmtK(median(sv)), FmtK(p25), FmtK(p75))
 }
@@ -600,6 +675,7 @@ type ReleaseWindow struct {
 	Remaining int
 	Created   int
 	Floor     time.Time
+	Pickups   []ReleaseETAResult
 }
 
 type ReleaseETAResult struct {
@@ -645,6 +721,22 @@ func ReleaseETA(now time.Time, windowHours float64, closedTotal, closedWithPR in
 			res.Late = now.Add(time.Duration(cumRemaining / denom * float64(time.Hour)))
 		} else {
 			res.LateDiverges = true
+		}
+		for _, p := range r.Pickups {
+			pEarly, pLate := p.Early, p.Late
+			if p.Skip {
+				pEarly, pLate = now, now
+			}
+			if p.EarlyDiverges {
+				res.EarlyDiverges = true
+			} else if !res.EarlyDiverges && res.Early.Before(pEarly) {
+				res.Early = pEarly
+			}
+			if p.LateDiverges {
+				res.LateDiverges = true
+			} else if !res.LateDiverges && res.Late.Before(pLate) {
+				res.Late = pLate
+			}
 		}
 		if !r.Floor.IsZero() {
 			if !res.EarlyDiverges && res.Early.Before(r.Floor) {

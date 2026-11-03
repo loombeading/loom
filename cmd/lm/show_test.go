@@ -1006,7 +1006,7 @@ func TestShowPickupMatchesAheadReleaseETA(t *testing.T) {
 	if len(body) != 2 {
 		t.Fatalf("## Milestones body = %q, want the Window line and exactly the release line", body)
 	}
-	etaPattern := regexp.MustCompile(`  eta=(.+)$`)
+	etaPattern := regexp.MustCompile(`  eta=(.+?)  spent=`)
 	m := etaPattern.FindStringSubmatch(body[1])
 	if m == nil {
 		t.Fatalf("## Milestones line = %q, want an eta= range", body[1])
@@ -1024,6 +1024,61 @@ func TestShowPickupMatchesAheadReleaseETA(t *testing.T) {
 	want := "Pickup: ahead=2 eta=" + wantEta
 	if got != want {
 		t.Errorf("show pickup line = %q, want %q", got, want)
+	}
+}
+
+func TestAheadMilestoneETANotEarlierThanChildPickup(t *testing.T) {
+	initBeadsDir(t)
+	orig := time.Local
+	time.Local = time.FixedZone("JST", 9*60*60)
+	t.Cleanup(func() { time.Local = orig })
+
+	for i := range 20 {
+		id := mustCreateBead(t, "--title", fmt.Sprintf("filler-%d", i))
+		if i < 15 {
+			if _, errS, code := runCmd(t, []string{"update", id, "--external-ref", fmt.Sprintf("https://github.com/o/r/pull/%d", i)}, ""); code != 0 {
+				t.Fatalf("update filler %d external-ref: exit code = %d, stderr = %q", i, code, errS)
+			}
+		}
+		if _, errS, code := runCmd(t, []string{"close", id, "--summary", "s"}, ""); code != 0 {
+			t.Fatalf("close filler %d: exit code = %d, stderr = %q", i, code, errS)
+		}
+	}
+	for i := range 6 {
+		mustCreateBead(t, "--title", fmt.Sprintf("front-%d", i), "--priority", "1", "--due", "2099-01-01T00:00:00Z")
+	}
+	epic := mustCreateBead(t, "--title", "release", "--label", "milestone:test", "--priority", "1")
+	children := []string{
+		mustCreateBead(t, "--title", "c1", "--parent", epic, "--priority", "1"),
+		mustCreateBead(t, "--title", "c2", "--parent", epic, "--priority", "1"),
+	}
+
+	aheadOut, errS, code := runCmd(t, []string{"ahead"}, "")
+	if code != 0 {
+		t.Fatalf("ahead: exit code = %d, stderr = %q", code, errS)
+	}
+	body := aheadSection(t, aheadOut, "## Milestones")
+	if len(body) != 2 {
+		t.Fatalf("## Milestones body = %q, want the Window line and exactly the release line", body)
+	}
+	edges := regexp.MustCompile(`(\d{4}-\d\d-\d\d \d\d:\d\d) JST〜(\d{4}-\d\d-\d\d \d\d:\d\d) JST`)
+	milestone := edges.FindStringSubmatch(body[1])
+	if milestone == nil {
+		t.Fatalf("## Milestones line = %q, want a non-diverging eta range", body[1])
+	}
+
+	for _, child := range children {
+		showOut, errS, code := runCmd(t, []string{"show", child}, "")
+		if code != 0 {
+			t.Fatalf("show %s: exit code = %d, stderr = %q", child, code, errS)
+		}
+		pickup := edges.FindStringSubmatch(pickupLineFromShow(t, showOut))
+		if pickup == nil {
+			t.Fatalf("show %s pickup line = %q, want a non-diverging eta range", child, pickupLineFromShow(t, showOut))
+		}
+		if milestone[1] < pickup[1] || milestone[2] < pickup[2] {
+			t.Errorf("milestone eta = %s〜%s, earlier than %s pickup eta %s〜%s", milestone[1], milestone[2], child, pickup[1], pickup[2])
+		}
 	}
 }
 

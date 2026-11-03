@@ -73,8 +73,8 @@ func TestCoefficientKeysMatchSchemaTable(t *testing.T) {
 		t.Fatal(err)
 	}
 	known := CoefficientKeys()
-	if len(known) != 17 || len(inTable) != 17 {
-		t.Fatalf("known keys = %d, table keys = %d, want 17 each", len(known), len(inTable))
+	if len(known) != 18 || len(inTable) != 18 {
+		t.Fatalf("known keys = %d, table keys = %d, want 18 each", len(known), len(inTable))
 	}
 	for _, k := range known {
 		if !inTable[k] {

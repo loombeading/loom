@@ -23,10 +23,12 @@ body:
     id: install
     attributes:
       label: 入れ方
+      description: README の「インストール」の (a)〜(d) のどれで入れたかを選んでください。
       options:
-        - GitHub Release のバイナリ
-        - go install
-        - ソースからのビルド
+        - (a) Homebrew
+        - (b) go install
+        - (c) GitHub Release のバイナリ（install.sh を含む）
+        - (d) clone したリポジトリからのビルド
         - その他
     validations:
       required: true

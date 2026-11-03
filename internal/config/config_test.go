@@ -111,6 +111,40 @@ func TestLoadCreateRequireMilestone(t *testing.T) {
 	}
 }
 
+func TestLoadAcceptsNoteInEverySection(t *testing.T) {
+	path := writeConfig(t, `{
+  "note": "n",
+  "compaction": {"note": "n", "retention_days": 7},
+  "list": {"note": "n", "limit": 11},
+  "namespace": {"note": "n", "default": "web"},
+  "db": {"note": "n", "busy_timeout_ms": 1234},
+  "slo": {"note": "n", "warn_minutes": 21, "incident_minutes": 61, "target_percent": 95},
+  "create": {"note": "n", "require_milestone": true},
+  "id": {"note": "n", "short_len": 6}
+}`)
+	cfg, found, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !found {
+		t.Fatal("found = false, want true")
+	}
+	want := Config{
+		RetentionDays:          7,
+		ListLimit:              11,
+		NamespaceDefault:       "web",
+		BusyTimeoutMS:          1234,
+		SLOWarnMinutes:         21,
+		SLOIncidentMinutes:     61,
+		SLOTargetPercent:       95,
+		CreateRequireMilestone: true,
+		IDShortLen:             6,
+	}
+	if *cfg != want {
+		t.Fatalf("cfg = %+v, want %+v", *cfg, want)
+	}
+}
+
 func TestLoadUnknownSectionErrors(t *testing.T) {
 	path := writeConfig(t, `{"bogus":{"foo":1}}`)
 	if _, _, err := Load(path); err == nil {
@@ -205,5 +239,18 @@ func TestShortLenOr(t *testing.T) {
 	}
 	if got := (&Config{}).ShortLenOr(4); got != 4 {
 		t.Fatalf("unset = %d, want 4", got)
+	}
+}
+
+func TestRetentionDaysOr(t *testing.T) {
+	var nilCfg *Config
+	if got := nilCfg.RetentionDaysOr(30); got != 30 {
+		t.Fatalf("nil cfg = %d, want 30", got)
+	}
+	if got := (&Config{RetentionDays: 0}).RetentionDaysOr(30); got != 30 {
+		t.Fatalf("zero = %d, want 30", got)
+	}
+	if got := (&Config{RetentionDays: 7}).RetentionDaysOr(30); got != 7 {
+		t.Fatalf("set = %d, want 7", got)
 	}
 }

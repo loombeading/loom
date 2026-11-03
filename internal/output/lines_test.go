@@ -5,6 +5,7 @@ package output
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -98,6 +99,61 @@ func TestWriteNewlyReady(t *testing.T) {
 			t.Errorf("WriteNewlyReady() = %q, want %q", buf.String(), want)
 		}
 	})
+}
+
+func TestWriteCancelled(t *testing.T) {
+	cases := []struct {
+		name string
+		rows []BeadRow
+	}{
+		{name: "empty", rows: nil},
+		{name: "single", rows: []BeadRow{
+			{ID: "bd-1", Title: "Fix bug", Status: "cancelled", Type: "task", Priority: 2},
+		}},
+		{name: "multiple with different status priority and claimer", rows: []BeadRow{
+			{ID: "bd-1", Title: "Fix bug", Status: "cancelled", Type: "task", Priority: 1},
+			{ID: "bd-2", Title: "Add feature", Status: "open", Type: "task", Priority: 3, ClaimedBy: "agent-a"},
+			{ID: "bd-3", Title: "Refactor", Status: "in_progress", Type: "task", Priority: 4, ClaimedBy: "agent-b"},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got, list bytes.Buffer
+			WriteCancelled(&got, tc.rows)
+			WriteBeadList(&list, tc.rows)
+			want := "## Cancelled\n" + list.String()
+			if got.String() != want {
+				t.Errorf("WriteCancelled() = %q, want %q", got.String(), want)
+			}
+			if first, _, _ := strings.Cut(got.String(), "\n"); first != CancelledHeading {
+				t.Errorf("first line = %q, want %q", first, CancelledHeading)
+			}
+		})
+	}
+}
+
+func TestWriteClaimed(t *testing.T) {
+	cases := []struct {
+		name string
+		id   string
+	}{
+		{name: "plain id", id: "bd-a3f8"},
+		{name: "markdown symbols", id: "bd-*_[x]#1"},
+		{name: "newline in id", id: "bd-1\n## injected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			WriteClaimed(&buf, tc.id)
+			want := fmt.Sprintf(ClaimedLineFormat+"\n", EscapeInline(tc.id))
+			if buf.String() != want {
+				t.Errorf("WriteClaimed(%q) = %q, want %q", tc.id, buf.String(), want)
+			}
+			if n := strings.Count(buf.String(), "\n"); n != 1 {
+				t.Errorf("WriteClaimed(%q) = %q, has %d newlines, want 1", tc.id, buf.String(), n)
+			}
+		})
+	}
 }
 
 func TestWriteRejected(t *testing.T) {

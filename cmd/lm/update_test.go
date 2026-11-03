@@ -124,3 +124,85 @@ func TestSetGivenFields(t *testing.T) {
 		t.Fatalf("got %+v, want %+v", in, want)
 	}
 }
+
+func TestUpdateCancelAutoResolvesGateOnlyWhenAllBlockedTerminal(t *testing.T) {
+	initBeadsDir(t)
+	target1 := mustCreateBead(t, "--title", "target1")
+	target2 := mustCreateBead(t, "--title", "target2")
+	soleGate := mustGateCreateCmd(t, []string{target1}, "sole")
+	sharedGate := mustGateCreateCmd(t, []string{target1, target2}, "shared")
+
+	out, errS, code := runCmd(t, []string{"update", target1, "--status", "cancelled", "--reason", "r"}, "")
+	if code != 0 {
+		t.Fatalf("update cancel: exit code = %d, stderr = %q", code, errS)
+	}
+	if !strings.Contains(out, "- Auto-resolved: "+soleGate) {
+		t.Errorf("update output = %q, want an Auto-resolved line for %q", out, soleGate)
+	}
+	if strings.Contains(out, "Auto-resolved: "+sharedGate) {
+		t.Errorf("update output = %q, want no Auto-resolved line for %q while target2 is open", out, sharedGate)
+	}
+	if strings.Index(out, "- Updated: ") > strings.Index(out, "- Auto-resolved: ") {
+		t.Errorf("update output = %q, want the Updated line before the Auto-resolved line", out)
+	}
+
+	showOut, _, _ := runCmd(t, []string{"show", soleGate}, "")
+	if !strings.Contains(showOut, `status: "closed"`) {
+		t.Errorf("gate show output = %q, want status closed", showOut)
+	}
+}
+
+func TestUpdateWithoutCancelDoesNotAutoResolveGate(t *testing.T) {
+	initBeadsDir(t)
+	target := mustCreateBead(t, "--title", "target")
+	mustGateCreateCmd(t, []string{target}, "gate")
+
+	out, errS, code := runCmd(t, []string{"update", target, "--add-label", "x"}, "")
+	if code != 0 {
+		t.Fatalf("update: exit code = %d, stderr = %q", code, errS)
+	}
+	if strings.Contains(out, "Auto-resolved") {
+		t.Errorf("update output = %q, want no Auto-resolved line without a terminal transition", out)
+	}
+}
+
+func TestUpdateClearErrorRejectsEveryID(t *testing.T) {
+	initBeadsDir(t)
+	a := mustCreateBead(t, "--title", "a", "--description", "d")
+	b := mustCreateBead(t, "--title", "b", "--description", "d")
+
+	cases := []struct {
+		name   string
+		args   []string
+		reason string
+	}{
+		{"unknown field", []string{"update", a, b, "--clear", "title"}, `unknown --clear field "title"`},
+		{"clear and value", []string{"update", a, b, "--clear", "description", "--description", "x"}, "--clear and --description both given"},
+	}
+	for _, c := range cases {
+		out, _, code := runCmd(t, c.args, "")
+		if code != 1 {
+			t.Fatalf("%s: exit code = %d, want 1", c.name, code)
+		}
+		var rejected []string
+		for line := range strings.SplitSeq(out, "\n") {
+			if strings.HasPrefix(line, "Rejected: ") {
+				rejected = append(rejected, line)
+			}
+		}
+		if len(rejected) != 2 {
+			t.Fatalf("%s: Rejected lines = %q, want 2", c.name, rejected)
+		}
+		for i, id := range []string{a, b} {
+			if !strings.Contains(rejected[i], id) || !strings.Contains(rejected[i], c.reason) {
+				t.Errorf("%s: Rejected line %q, want id %q and reason %q", c.name, rejected[i], id, c.reason)
+			}
+		}
+	}
+	for _, id := range []string{a, b} {
+		out, _, _ := runCmd(t, []string{"show", id}, "")
+		if !strings.Contains(out, "\nd\n") {
+			t.Errorf("show %s = %q, want description d unchanged", id, out)
+		}
+	}
+}

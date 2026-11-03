@@ -42,11 +42,13 @@ func migrateTo(ctx context.Context, dir string, opts OpenOptions, files fs.FS, t
 	if err != nil {
 		return MigrateResult{}, err
 	}
-	if target == 0 && (v == prePublicVersion || v == 0) {
-		return reshapePrePublic(ctx, db, dir, v)
+	if v == 0 && target > 0 {
+		if err := renameIfPreRename(ctx, db, dir); err != nil {
+			return MigrateResult{}, err
+		}
 	}
 	if v > target {
-		return MigrateResult{}, ErrSchemaTooNew
+		return relabelUnpublished(ctx, db, dir, v, target)
 	}
 	if v == target {
 		return MigrateResult{From: v, To: v}, nil
@@ -83,9 +85,27 @@ func migrateTo(ctx context.Context, dir string, opts OpenOptions, files fs.FS, t
 	return MigrateResult{From: v, To: target, Backup: backup}, nil
 }
 
-const prePublicVersion = 1
+func renameIfPreRename(ctx context.Context, db *sql.DB, dir string) error {
+	got, err := schemaShape(ctx, db)
+	if err != nil {
+		return err
+	}
+	want, err := referenceShape(ctx)
+	if err != nil {
+		return err
+	}
+	if got == want {
+		return nil
+	}
+	old, err := preRenameShape(ctx)
+	if err != nil || got != old {
+		return err
+	}
+	_, err = renamePrePublic(ctx, db, dir, 0)
+	return err
+}
 
-func reshapePrePublic(ctx context.Context, db *sql.DB, dir string, from int) (MigrateResult, error) {
+func relabelUnpublished(ctx context.Context, db *sql.DB, dir string, from, target int) (MigrateResult, error) {
 	got, err := schemaShape(ctx, db)
 	if err != nil {
 		return MigrateResult{}, err
@@ -95,29 +115,17 @@ func reshapePrePublic(ctx context.Context, db *sql.DB, dir string, from int) (Mi
 		return MigrateResult{}, err
 	}
 	if got != want {
-		old, err := preRenameShape(ctx)
-		switch {
-		case err != nil:
-			return MigrateResult{}, err
-		case got == old:
-			return renamePrePublic(ctx, db, dir, from)
-		case from == 0:
-			return MigrateResult{From: 0, To: 0}, nil
-		}
 		return MigrateResult{}, ErrSchemaTooNew
 	}
-	if from == 0 {
-		return MigrateResult{From: 0, To: 0}, nil
-	}
 
-	backup := DBPath(dir) + ".bak-schema" + strconv.Itoa(prePublicVersion)
+	backup := DBPath(dir) + ".bak-schema" + strconv.Itoa(from)
 	if err := backupOnce(ctx, db, backup); err != nil {
 		return MigrateResult{}, err
 	}
-	if _, err := db.ExecContext(ctx, `PRAGMA user_version = 0`); err != nil {
+	if _, err := db.ExecContext(ctx, `PRAGMA user_version = `+strconv.Itoa(target)); err != nil {
 		return MigrateResult{}, fmt.Errorf("relabel schema version: %w", err)
 	}
-	return MigrateResult{From: prePublicVersion, To: 0, Backup: backup}, nil
+	return MigrateResult{From: from, To: target, Backup: backup}, nil
 }
 
 var referenceSQLOpen = sql.Open

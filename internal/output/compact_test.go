@@ -24,6 +24,8 @@ func TestCompactedJudgment(t *testing.T) {
 		{"open bead never compacts", "open", false, "", true, 30, false},
 		{"in_progress bead never compacts", "in_progress", false, "", true, 30, false},
 		{"closed within retention", "closed", true, "2026-01-15T00:00:00Z", true, 30, false},
+		{"closed exactly at retention is not exceeding", "closed", true, "2026-01-01T00:00:00Z", true, 30, false},
+		{"closed one second past retention", "closed", true, "2025-12-31T23:59:59Z", true, 30, true},
 		{"closed exceeding retention", "closed", true, "2025-01-01T00:00:00Z", true, 30, true},
 		{"cancelled exceeding retention", "cancelled", true, "2025-01-01T00:00:00Z", true, 30, true},
 		{"closed with no closed_at", "closed", false, "", true, 30, false},

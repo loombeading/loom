@@ -10,7 +10,7 @@ import (
 	"fmt"
 )
 
-const SchemaVersion = 0
+const SchemaVersion = 1
 
 var schemaDDL = []string{
 	`CREATE TABLE beads (
@@ -87,7 +87,7 @@ var schemaDDL = []string{
 		reason       TEXT,
 		origin       TEXT NOT NULL
 	)`,
-	`CREATE INDEX idx_dependencies_depends_on ON dependencies (depends_on_id, type, removed)`,
+	`CREATE INDEX idx_dependencies_depends_on ON dependencies (depends_on_id, type, removed, bead_id)`,
 	`CREATE INDEX idx_dependencies_bead ON dependencies (bead_id, type, removed)`,
 	`CREATE INDEX idx_beads_status_priority_created ON beads (status, priority, created_at)`,
 	`CREATE INDEX idx_audit_log_bead_field_occurred ON audit_log (bead_id, field, occurred_at)`,
@@ -118,7 +118,8 @@ var schemaDDL = []string{
 		('due_lead', '72h', '1970-01-01T00:00:00.000Z'),
 		('expedite_max_open', '2', '1970-01-01T00:00:00.000Z'),
 		('expedite_max_age', '24h', '1970-01-01T00:00:00.000Z'),
-		('cutoff_priority', '2', '1970-01-01T00:00:00.000Z')`,
+		('cutoff_priority', '2', '1970-01-01T00:00:00.000Z'),
+		('time_adjust', 'shadow', '1970-01-01T00:00:00.000Z')`,
 }
 
 var ErrSchemaTooNew = errors.New("database schema is newer than this build of lm understands; a newer lm is required")

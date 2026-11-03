@@ -53,6 +53,14 @@ func droppedFromReady(ctx context.Context, q domain.Querier, fn func() error) (m
 	return before, nil
 }
 
+func idSet(ids []string) map[string]bool {
+	set := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		set[id] = true
+	}
+	return set
+}
+
 func newlyRows(ctx context.Context, q domain.Querier, n domain.ShortIDs, ids map[string]bool, defaultNamespace string) ([]output.Cond, []output.BeadRow, error) {
 	namespace, err := domain.ResolveNamespaceForFilter("", false, os.Getenv, defaultNamespace)
 	if err != nil {
@@ -132,11 +140,11 @@ func effectiveSources(ctx context.Context, q domain.Querier, eff map[string]doma
 	}
 	var sources []string
 	for _, id := range ids {
-		if e := eff[id]; e.Source != "" && e.Source != domain.SourceExpedite {
+		if e := eff[id]; e.Source != "" && !isLiteralSource(e.Source) {
 			sources = append(sources, e.Source)
 		}
 	}
-	if len(sources) == 0 && !hasExpediteSource(eff, ids) {
+	if len(sources) == 0 && !hasLiteralSource(eff, ids) {
 		return map[string]string{}, nil
 	}
 	resolver, err := domain.NewAliasResolverFor(ctx, q, sources)
@@ -149,8 +157,8 @@ func effectiveSources(ctx context.Context, q domain.Querier, eff map[string]doma
 		if e.Source == "" {
 			continue
 		}
-		if e.Source == domain.SourceExpedite {
-			out[id] = domain.SourceExpedite
+		if isLiteralSource(e.Source) {
+			out[id] = e.Source
 			continue
 		}
 		display, err := sourceDisplayID(ctx, q, resolver, e.Source, n)
@@ -162,9 +170,13 @@ func effectiveSources(ctx context.Context, q domain.Querier, eff map[string]doma
 	return out, nil
 }
 
-func hasExpediteSource(eff map[string]domain.EffectivePriority, ids []string) bool {
+func isLiteralSource(s string) bool {
+	return s == domain.SourceExpedite || s == domain.SourceDue || s == domain.SourceAged || s == domain.SourceDecayed
+}
+
+func hasLiteralSource(eff map[string]domain.EffectivePriority, ids []string) bool {
 	for _, id := range ids {
-		if eff[id].Source == domain.SourceExpedite {
+		if isLiteralSource(eff[id].Source) {
 			return true
 		}
 	}
@@ -205,9 +217,10 @@ type readyFlags struct {
 	namespaceSet  bool
 	filter        filterFlags
 
-	claim    bool
-	actor    string
-	claimTTL time.Duration
+	claim        bool
+	actor        string
+	claimTTL     time.Duration
+	timeAdjusted bool
 }
 
 func parseReadyFlags(name string, args []string, stderr io.Writer) (*flag.FlagSet, readyFlags, error) {
@@ -225,6 +238,7 @@ func parseReadyFlags(name string, args []string, stderr io.Writer) (*flag.FlagSe
 		fs.BoolVar(&rf.claim, "claim", false, "claim the first Ready Bead in the same transaction as the enumeration")
 		fs.StringVar(&rf.actor, flagActor, "", actorFlagUsage+" (only with --claim)")
 		fs.DurationVar(&rf.claimTTL, "claim-ttl", 0, "with --claim, claim period after which another actor may take the claim over (e.g. 30m)")
+		fs.BoolVar(&rf.timeAdjusted, "time-adjusted", false, "list with aging, decay and hold applied whatever time_adjust is set to (read-only; not with --claim)")
 	}
 	rf.filter.bind(fs)
 	if err := fs.Parse(reorderArgs(fs, args)); err != nil {
@@ -263,6 +277,7 @@ func resolveReadyFilter(ctx context.Context, q domain.Querier, rf readyFlags, n 
 		Limit:         rf.limit,
 		Priority:      rf.priority,
 		Now:           effNow(),
+		TimeAdjusted:  rf.timeAdjusted,
 	}
 	return f, filt, namespace, true
 }
@@ -329,6 +344,10 @@ func runReady(args []string, stdout, stderr io.Writer) int {
 		output.WriteError(stderr, errMsg)
 		return 1
 	}
+	if claim && rf.timeAdjusted {
+		output.WriteError(stderr, "--time-adjusted is read-only and cannot be combined with --claim")
+		return 1
+	}
 	db, cfg, err := openReadyDB(fs, &rf, actorFlag)
 	if err != nil {
 		output.WriteError(stderr, err.Error())
@@ -351,30 +370,43 @@ func runReady(args []string, stdout, stderr io.Writer) int {
 		return runReadyClaim(ctx, db, n, f, filt, namespace, rf, actorFlag, stdout, stderr)
 	}
 
-	beads, eff, total, err := domain.ReadyBeadsEffective(ctx, db.SQL, f)
+	res, err := domain.ReadyList(ctx, db.SQL, f)
 	if err != nil {
 		output.WriteError(stderr, err.Error())
 		return 1
 	}
-	resolver, err := resolverFor(ctx, db.SQL, beads)
+	resolver, err := resolverFor(ctx, db.SQL, res.Beads)
 	if err != nil {
 		output.WriteError(stderr, err.Error())
 		return 1
 	}
-	rows, err := beadRows(beads, n, resolver)
+	rows, err := beadRows(res.Beads, n, resolver)
 	if err != nil {
 		output.WriteError(stderr, err.Error())
 		return 1
 	}
-	if err := withEffective(ctx, db.SQL, rows, eff, n); err != nil {
+	if err := withEffective(ctx, db.SQL, rows, res.Eff, n); err != nil {
 		output.WriteError(stderr, err.Error())
 		return 1
+	}
+	if res.Adjusted {
+		sortByDemand(rows, res.Demand)
 	}
 
 	conds := namespaceConds(namespace)
 	writeFilterHeader(stdout, conds, filt, rf.filter)
-	writeBeadListFooter(stdout, rows, total)
+	writeBeadListFooter(stdout, rows, res.Total)
+	if res.Adjusted {
+		output.WriteHeld(stdout, res.Held)
+	}
 	return 0
+}
+
+func sortByDemand(rows []output.BeadRow, demand map[string]bool) {
+	for i := range rows {
+		rows[i].Demand = demand[rows[i].CanonicalID]
+	}
+	output.SortBeads(rows)
 }
 
 func runReadyClaim(ctx context.Context, db *storage.DB, n domain.ShortIDs, f domain.ReadyFilter, filt resolvedFilter, namespace string, rf readyFlags, actorFlag string, stdout, stderr io.Writer) int {
@@ -392,16 +424,17 @@ func runReadyClaim(ctx context.Context, db *storage.DB, n domain.ShortIDs, f dom
 	var claimed *domain.Bead
 	var eff map[string]domain.EffectivePriority
 	err = db.WithWrite(ctx, func(tx *sql.Tx) error {
-		beads, e, _, err := domain.ReadyBeadsEffective(ctx, tx, claimF)
-		eff = e
+		res, err := domain.ReadyList(ctx, tx, claimF)
+		eff = res.Eff
 		if err != nil {
 			return err
 		}
-		if len(beads) == 0 {
+		if len(res.Beads) == 0 {
 			return nil
 		}
-		id := beads[0].ID
-		in := domain.UpdateInput{ID: id, Claim: true, Priority: -1, Actor: actorVal, Now: now, Clock: clock, ClaimTTL: rf.claimTTL}
+		id := res.Beads[0].ID
+		in := domain.UpdateInput{ID: id, Claim: true, Priority: -1, Actor: actorVal, Now: now, Clock: clock, ClaimTTL: rf.claimTTL,
+			Reason: "ready --claim: now=" + claimF.Now}
 		if _, err := domain.UpdateBead(ctx, tx, in); err != nil {
 			return err
 		}

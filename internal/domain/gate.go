@@ -165,7 +165,7 @@ type GateResolveInput struct {
 
 func GateResolve(ctx context.Context, tx *sql.Tx, in GateResolveInput) error {
 	if in.Reason == "" {
-		return &ValidationError{Msg: "--reason is required for `lm gate resolve`"}
+		return &ValidationError{Msg: "--reason is required for lm gate resolve"}
 	}
 
 	status, beadType, err := lookupStatusAndType(ctx, tx, in.ID, "gate resolve")
@@ -197,9 +197,36 @@ type GateRejectInput struct {
 	Now    string
 }
 
-func GateReject(ctx context.Context, tx *sql.Tx, in GateRejectInput) ([]string, error) {
+type GateRejectResult struct {
+	Cancelled    []string
+	AutoResolved []string
+}
+
+func GateReject(ctx context.Context, tx *sql.Tx, in GateRejectInput) (GateRejectResult, error) {
+	cancelled, err := cancelGateAndBlocked(ctx, tx, in)
+	if err != nil {
+		return GateRejectResult{}, err
+	}
+	res := GateRejectResult{Cancelled: cancelled}
+	seen := map[string]bool{}
+	for _, id := range cancelled {
+		resolved, err := AutoResolveGatesForBead(ctx, tx, id, in.Actor, in.Now)
+		if err != nil {
+			return GateRejectResult{}, err
+		}
+		for _, g := range resolved {
+			if !seen[g] {
+				seen[g] = true
+				res.AutoResolved = append(res.AutoResolved, g)
+			}
+		}
+	}
+	return res, nil
+}
+
+func cancelGateAndBlocked(ctx context.Context, tx *sql.Tx, in GateRejectInput) ([]string, error) {
 	if in.Reason == "" {
-		return nil, &ValidationError{Msg: "--reason is required for `lm gate reject`"}
+		return nil, &ValidationError{Msg: "--reason is required for lm gate reject"}
 	}
 
 	status, beadType, err := lookupStatusAndType(ctx, tx, in.ID, "gate reject")
@@ -291,11 +318,41 @@ func GateListEffective(ctx context.Context, q Querier, now string) ([]GateListEn
 	if err != nil {
 		return nil, nil, err
 	}
-	slices.SortFunc(out, func(a, b GateListEntry) int {
-		return compareEffective(raised,
-			Bead{ID: a.ID, Priority: a.Priority, CreatedAt: a.CreatedAt},
-			Bead{ID: b.ID, Priority: b.Priority, CreatedAt: b.CreatedAt})
-	})
+	coef, err := LoadCoefficients(ctx, q)
+	if err != nil {
+		return nil, nil, err
+	}
+	asBead := func(e GateListEntry) Bead {
+		return Bead{ID: e.ID, Priority: e.Priority, CreatedAt: e.CreatedAt}
+	}
+	if coef[CoefficientTimeAdjust] == TimeAdjustOn {
+		var ready []Bead
+		for _, e := range out {
+			blockers, err := ActiveBlockers(ctx, q, e.ID)
+			if err != nil {
+				return nil, nil, err
+			}
+			if len(blockers) == 0 {
+				ready = append(ready, asBead(e))
+			}
+		}
+		adj, err := TimeAdjust(ctx, q, nowOrDefault(now), coef, raised, ready)
+		if err != nil {
+			return nil, nil, err
+		}
+		slices.SortFunc(out, func(a, b GateListEntry) int { return compareAdjusted(adj, asBead(a), asBead(b)) })
+		breakPrereqCycles(out)
+		return out, adj.Eff, nil
+	}
+	gateBeads := make([]Bead, len(out))
+	for i, e := range out {
+		gateBeads[i] = asBead(e)
+	}
+	demand, err := CandidateDemand(ctx, q, nowOrDefault(now), coef, gateBeads)
+	if err != nil {
+		return nil, nil, err
+	}
+	slices.SortFunc(out, func(a, b GateListEntry) int { return compareEffective(raised, demand, asBead(a), asBead(b)) })
 	breakPrereqCycles(out)
 	return out, raised, nil
 }

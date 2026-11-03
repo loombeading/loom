@@ -13,6 +13,8 @@ import (
 
 const defaultBeadType = "task"
 
+const bracketPartsCap = 4
+
 var pullRequestRefRe = regexp.MustCompile(`^https://github\.com/[^/]+/[^/]+/pull/(\d+)$`)
 
 func WriteBeadList(w io.Writer, rows []BeadRow) {
@@ -25,8 +27,27 @@ func WriteBeadList(w io.Writer, rows []BeadRow) {
 	}
 }
 
+func WriteHeld(w io.Writer, n int) {
+	fmt.Fprintf(w, "- Held: %d\n", n)
+}
+
+func WriteHoldCancelled(w io.Writer, rows []BeadRow, heldSince []string) {
+	fmt.Fprintln(w, CancelledHeading)
+	if len(rows) == 0 {
+		fmt.Fprintln(w, noneLine)
+		return
+	}
+	for i, r := range rows {
+		fmt.Fprintf(w, "- Cancelled: %s %s %s  held since %s\n", displayID(r), statusPriorityTypeBracket(r.Status, r.Priority, r.Type, r.ExternalRefs), Escape(r.Title), EscapeInline(heldSince[i]))
+	}
+}
+
+func WriteSkipped(w io.Writer, mode string) {
+	fmt.Fprintf(w, "- Skipped: time_adjust=%s\n", EscapeInline(mode))
+}
+
 func statusPriorityTypeBracket(status string, priority int, typ string, refs []string) string {
-	parts := make([]string, 0, 4)
+	parts := make([]string, 0, bracketPartsCap)
 	status = EscapeInline(status)
 	if typ != "" && typ != defaultBeadType {
 		parts = append(parts, EscapeInline(typ))
@@ -68,6 +89,9 @@ func beadLine(r BeadRow) string {
 	}
 	if len(r.BlockedBy) > 0 {
 		fmt.Fprintf(&sb, "  ← blocked by: %s", EscapeInline(strings.Join(r.BlockedBy, ", ")))
+	}
+	if r.HeldSince != "" {
+		fmt.Fprintf(&sb, "  ← held: no demand since %s", EscapeInline(r.HeldSince))
 	}
 	if r.EffSource != "" {
 		fmt.Fprintf(&sb, "  eff=P%d(%s)", r.EffPriority, EscapeInline(r.EffSource))

@@ -508,15 +508,15 @@ func TestUpdateMultipleIDsPartialRejection(t *testing.T) {
 	ok := mustCreateBead(t, "--title", "ok")
 	gate := mustCreateBead(t, "--title", "g", "--type", "gate", "--label", "kind:human")
 
-	out, _, code := runCmd(t, []string{"close", ok, gate}, "")
+	out, errS, code := runCmd(t, []string{"close", ok, gate}, "")
 	if code != 1 {
 		t.Fatalf("close [ok, gate]: exit code = %d, want 1", code)
 	}
 	if !strings.Contains(out, "- Closed:") {
 		t.Errorf("stdout = %q, want the ok Bead to have closed", out)
 	}
-	if !strings.Contains(out, "Rejected:") {
-		t.Errorf("stdout = %q, want the gate Bead to be rejected", out)
+	if !strings.Contains(errS, "Rejected:") {
+		t.Errorf("stderr = %q, want the gate Bead to be rejected", errS)
 	}
 	if !strings.Contains(out, "## Newly ready") || !strings.Contains(out, "(none)") {
 		t.Errorf("stdout = %q, want the Newly ready section", out)
@@ -681,12 +681,12 @@ func TestExternalRefInList(t *testing.T) {
 func TestCloseGateRejected(t *testing.T) {
 	initBeadsDir(t)
 	gate := mustCreateBead(t, "--title", "g", "--type", "gate", "--label", "kind:human")
-	out, _, code := runCmd(t, []string{"close", gate}, "")
+	_, errS, code := runCmd(t, []string{"close", gate}, "")
 	if code != 1 {
 		t.Fatalf("close gate: exit code = %d, want 1", code)
 	}
-	if !strings.Contains(out, "Rejected:") {
-		t.Errorf("stdout = %q, want a Rejected: line", out)
+	if !strings.Contains(errS, "Rejected:") {
+		t.Errorf("stderr = %q, want a Rejected: line", errS)
 	}
 }
 

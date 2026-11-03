@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-go_toolchain="go1.27.1"
+go_toolchain="go1.27.3"
 
 die() {
   echo "release-build.sh: $*" >&2

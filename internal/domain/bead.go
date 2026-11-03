@@ -767,15 +767,40 @@ func ListBeadsEffective(ctx context.Context, q Querier, f ListFilter) ([]Bead, m
 		return nil, nil, 0, err
 	}
 	fromWhere, args := ListWhere(f)
-	if len(raised) == 0 {
-		beads, total, err := runListQuery(ctx, q, fromWhere, args, f.Label, f.Limit, SortPriority)
-		return beads, raised, total, err
-	}
 	beads, total, err := runListQuery(ctx, q, fromWhere, args, f.Label, 0, SortPriority)
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	slices.SortFunc(beads, func(a, b Bead) int { return compareEffective(raised, a, b) })
+	coef, err := LoadCoefficients(ctx, q)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	if coef[CoefficientTimeAdjust] == TimeAdjustOn {
+		readyWhere, readyArgs := ReadyWhere(ReadyFilter{Priority: -1})
+		keys, err := queryBeads(ctx, q, "SELECT "+readyKeyCols+" "+readyWhere, readyArgs, "")
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		isReady := make(map[string]bool, len(keys))
+		for _, k := range keys {
+			isReady[k.ID] = true
+		}
+		ready := slices.DeleteFunc(slices.Clone(beads), func(b Bead) bool { return !isReady[b.ID] })
+		adj, err := TimeAdjust(ctx, q, nowOrDefault(f.Now), coef, raised, ready)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		slices.SortFunc(beads, func(a, b Bead) int { return compareAdjusted(adj, a, b) })
+		if f.Limit > 0 && f.Limit < total {
+			beads = beads[:f.Limit]
+		}
+		return beads, adj.Eff, total, nil
+	}
+	demand, err := CandidateDemand(ctx, q, nowOrDefault(f.Now), coef, beads)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	slices.SortFunc(beads, func(a, b Bead) int { return compareEffective(raised, demand, a, b) })
 	if f.Limit > 0 && f.Limit < total {
 		beads = beads[:f.Limit]
 	}

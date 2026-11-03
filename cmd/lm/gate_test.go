@@ -426,6 +426,27 @@ func TestGateCloseAndUpdateStatusClosedRejected(t *testing.T) {
 	}
 }
 
+func TestEDD44GateCloseRejectedWording(t *testing.T) {
+	initBeadsDir(t)
+	target := mustCreateBead(t, "--title", "target")
+	gateID := mustGateCreateCmd(t, []string{target}, "x")
+
+	outS, errS, code := runCmd(t, []string{"close", gateID}, "")
+	if code != 1 {
+		t.Fatalf("lm close on a gate: exit code = %d, stderr = %q, want 1", code, errS)
+	}
+	want := "Rejected: " + gateID + " (a Gate can only be resolved with lm gate resolve)"
+	if !strings.Contains(errS, want) {
+		t.Errorf("lm close on a gate: stderr = %q, want it to contain %q", errS, want)
+	}
+	if strings.Contains(outS, "Rejected") {
+		t.Errorf("lm close on a gate: stdout = %q, want no Rejected line", outS)
+	}
+	if showOut, _, showCode := runCmd(t, []string{"show", gateID}, ""); showCode != 0 || !strings.Contains(showOut, `status: "open"`) {
+		t.Errorf("gate after rejected close: show exit = %d, output = %q, want status open", showCode, showOut)
+	}
+}
+
 func TestGateCancelAndReopenRejected(t *testing.T) {
 	initBeadsDir(t)
 	target := mustCreateBead(t, "--title", "target")
@@ -989,8 +1010,13 @@ func TestGateSweepReportsGateSweepError(t *testing.T) {
 	initBeadsDir(t)
 	target := mustCreateBead(t, "--title", "target")
 	gateID := mustGateCreateCmd(t, []string{target}, "CI green")
-	if _, errS, code := runCmd(t, []string{"update", target, "--status", "cancelled"}, ""); code != 0 {
-		t.Fatalf("update --status cancelled: exit code = %d, stderr = %q", code, errS)
+	sqlDB, err := sql.Open("sqlite", "file:"+filepath.ToSlash(beadsDBPath(t)))
+	if err != nil {
+		t.Fatalf("open loom.db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	if _, err := sqlDB.ExecContext(t.Context(), "UPDATE beads SET status = 'cancelled' WHERE id = ?", mustCanonicalID(t, target)); err != nil {
+		t.Fatalf("cancel target directly: %v", err)
 	}
 	corruptLabels(t, gateID)
 
@@ -1257,5 +1283,26 @@ func TestGateCreateMaterialCLI(t *testing.T) {
 	out, _, code := runCmd(t, []string{"update", impl, "--external-ref", pr}, "")
 	if code != 1 || !strings.Contains(out, "adding this wait link would create a cycle: ") {
 		t.Fatalf("impl taking the PR it waits on: exit=%d stdout=%q, want the wait cycle", code, out)
+	}
+}
+
+func TestGateRejectCascadeAutoResolvesOtherGatesButNotTheRejectedOne(t *testing.T) {
+	initBeadsDir(t)
+	target := mustCreateBead(t, "--title", "target")
+	rejected := mustGateCreateCmd(t, []string{target}, "rejected")
+	sibling := mustGateCreateCmd(t, []string{target}, "sibling")
+
+	out, errS, code := runCmd(t, []string{"gate", "reject", rejected, "--reason", "no"}, "")
+	if code != 0 {
+		t.Fatalf("gate reject: exit code = %d, stderr = %q", code, errS)
+	}
+	if !strings.Contains(out, "- Auto-resolved: "+sibling) {
+		t.Errorf("reject output = %q, want an Auto-resolved line for %q", out, sibling)
+	}
+	if strings.Contains(out, "Auto-resolved: "+rejected) {
+		t.Errorf("reject output = %q, want no Auto-resolved line for the rejected gate", out)
+	}
+	if strings.Index(out, "- Rejected: ") > strings.Index(out, "- Auto-resolved: ") || strings.Index(out, "- Auto-resolved: ") > strings.Index(out, "## Cancelled") {
+		t.Errorf("reject output = %q, want Rejected, then Auto-resolved, then the Cancelled section", out)
 	}
 }

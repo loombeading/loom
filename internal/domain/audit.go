@@ -14,6 +14,8 @@ const (
 	AuditKindField = "field"
 	AuditKindNote  = "note"
 	AuditKindMerge = "merge"
+
+	AuditKindCoefficient = "coefficient"
 )
 
 const (

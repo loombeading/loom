@@ -24,8 +24,8 @@ func TestActorFlagHelpStatesResolutionOrder(t *testing.T) {
 			}
 		}
 	}
-	if len(targets) != 14 {
-		t.Fatalf("commands with --actor = %d, want 14: %v", len(targets), targets)
+	if len(targets) != 15 {
+		t.Fatalf("commands with --actor = %d, want 15: %v", len(targets), targets)
 	}
 	for _, args := range targets {
 		_, errS, code := runCmd(t, append(args, "-h"), "")

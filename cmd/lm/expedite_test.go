@@ -61,6 +61,33 @@ func TestExpediteBeyondMaxOpenIsRejectedUntilOneExpires(t *testing.T) {
 	mustCreateBead(t, "--title", "three", "--expedite", "1h", "--reason", "r")
 }
 
+func TestExpediteCapCountsOnlyOpenBeads(t *testing.T) {
+	initBeadsDir(t)
+	one := mustCreateBead(t, "--title", "one", "--expedite", "1h", "--reason", "r")
+	two := mustCreateBead(t, "--title", "two", "--expedite", "1h", "--reason", "r")
+	for _, id := range []string{one, two} {
+		if out, errS, code := runCmd(t, []string{"update", id, "--claim"}, ""); code != 0 {
+			t.Fatalf("claim %s: exit = %d, stdout = %q, stderr = %q", id, code, out, errS)
+		}
+	}
+
+	mustCreateBead(t, "--title", "three", "--expedite", "1h", "--reason", "r")
+	mustCreateBead(t, "--title", "four", "--expedite", "1h", "--reason", "r")
+
+	_, errS, code := runCmd(t, []string{"create", "--title", "five", "--expedite", "1h", "--reason", "r"}, "")
+	if code == 0 || !strings.Contains(errS, "2 expedites are already active") {
+		t.Fatalf("third open expedite: exit = %d, stderr = %q, want non-zero counting 2 open beads", code, errS)
+	}
+
+	if out, errS, code := runCmd(t, []string{"update", one, "--release", "--reason", "r"}, ""); code != 0 {
+		t.Fatalf("release past the cap must be allowed: exit = %d, stdout = %q, stderr = %q", code, out, errS)
+	}
+	_, errS, code = runCmd(t, []string{"create", "--title", "five", "--expedite", "1h", "--reason", "r"}, "")
+	if code == 0 || !strings.Contains(errS, "3 expedites are already active") {
+		t.Fatalf("expedite while the released bead exceeds the cap: exit = %d, stderr = %q, want non-zero counting 3 open beads", code, errS)
+	}
+}
+
 func TestExpediteRequiresReason(t *testing.T) {
 	initBeadsDir(t)
 	_, errS, code := runCmd(t, []string{"create", "--title", "t", "--expedite", "1h"}, "")

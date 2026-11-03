@@ -9,14 +9,10 @@ import (
 	"fmt"
 )
 
+const scopeHeadArgs = 3
+
 type DerivedMetric struct {
-	BlastRadius int
-
-	RetryCount int
-
 	ReworkCount int
-
-	TokenCost int
 
 	ClaimedAt string
 
@@ -37,34 +33,6 @@ func DerivedMetrics(ctx context.Context, q Querier, ids []string) (map[string]De
 		args[i] = id
 	}
 
-	blastRows, err := q.QueryContext(ctx, fmt.Sprintf(`
-		SELECT d.depends_on_id, COUNT(*)
-		FROM dependencies d
-		JOIN beads b ON b.id = d.bead_id
-		WHERE d.type = ? AND d.removed = 0 AND b.status NOT IN (?, ?)
-		  AND d.depends_on_id IN (%s)
-		GROUP BY d.depends_on_id`, placeholders),
-		append([]any{BlocksDepType, StatusClosed, StatusCancelled}, args...)...)
-	if err != nil {
-		return nil, fmt.Errorf("derived metrics: blast radius: %w", err)
-	}
-	if err := scanMetricCounts(blastRows, out, func(m *DerivedMetric, n int) { m.BlastRadius = n }); err != nil {
-		return nil, fmt.Errorf("derived metrics: blast radius: %w", err)
-	}
-
-	retryRows, err := q.QueryContext(ctx, fmt.Sprintf(`
-		SELECT bead_id, COUNT(*)
-		FROM audit_log
-		WHERE field IN (?, ?, ?) AND bead_id IN (%s)
-		GROUP BY bead_id`, placeholders),
-		append([]any{FieldRelease, FieldForceRelease, FieldClaimTakeover}, args...)...)
-	if err != nil {
-		return nil, fmt.Errorf("derived metrics: retry count: %w", err)
-	}
-	if err := scanMetricCounts(retryRows, out, func(m *DerivedMetric, n int) { m.RetryCount = n }); err != nil {
-		return nil, fmt.Errorf("derived metrics: retry count: %w", err)
-	}
-
 	reworkRows, err := q.QueryContext(ctx, fmt.Sprintf(`
 		SELECT bead_id, COUNT(*)
 		FROM audit_log
@@ -78,19 +46,7 @@ func DerivedMetrics(ctx context.Context, q Querier, ids []string) (map[string]De
 		return nil, fmt.Errorf("derived metrics: rework count: %w", err)
 	}
 
-	tokenRows, err := q.QueryContext(ctx, fmt.Sprintf(`
-		SELECT bead_id, COALESCE(SUM(tokens_in + tokens_out), 0)
-		FROM token_costs
-		WHERE bead_id IN (%s)
-		GROUP BY bead_id`, placeholders), args...)
-	if err != nil {
-		return nil, fmt.Errorf("derived metrics: token cost: %w", err)
-	}
-	if err := scanMetricCounts(tokenRows, out, func(m *DerivedMetric, n int) { m.TokenCost = n }); err != nil {
-		return nil, fmt.Errorf("derived metrics: token cost: %w", err)
-	}
-
-	scopeArgs := make([]any, 0, 3+len(args)+3)
+	scopeArgs := make([]any, 0, scopeHeadArgs+len(args)+scopeHeadArgs)
 	scopeArgs = append(scopeArgs, AuditKindField, FieldClaim, FieldForceClaim)
 	scopeArgs = append(scopeArgs, args...)
 	scopeArgs = append(scopeArgs, AuditKindField, FieldDependency,

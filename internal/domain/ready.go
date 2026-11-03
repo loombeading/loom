@@ -24,6 +24,8 @@ type ReadyFilter struct {
 	Limit int
 
 	Now string
+
+	TimeAdjusted bool
 }
 
 const blockedExistsClause = `
@@ -116,31 +118,80 @@ func ReadyBeads(ctx context.Context, q Querier, f ReadyFilter) ([]Bead, int, err
 	return beads, total, err
 }
 
+type ReadyResult struct {
+	Beads    []Bead
+	Eff      map[string]EffectivePriority
+	Demand   map[string]bool
+	Total    int
+	Held     int
+	Adjusted bool
+}
+
 func ReadyBeadsEffective(ctx context.Context, q Querier, f ReadyFilter) ([]Bead, map[string]EffectivePriority, int, error) {
+	r, err := ReadyList(ctx, q, f)
+	return r.Beads, r.Eff, r.Total, err
+}
+
+func ReadyList(ctx context.Context, q Querier, f ReadyFilter) (ReadyResult, error) {
 	fromWhere, args := ReadyWhere(f)
 
-	raised, err := RaisedPriorities(ctx, q, nowOrDefault(f.Now))
+	now := nowOrDefault(f.Now)
+	coef, err := LoadCoefficients(ctx, q)
 	if err != nil {
-		return nil, nil, 0, err
+		return ReadyResult{}, err
 	}
-	if len(raised) == 0 {
-		beads, total, err := runListQuery(ctx, q, fromWhere, args, f.Label, f.Limit, SortPriority)
-		return beads, raised, total, err
+	adjusted := f.TimeAdjusted || coef[CoefficientTimeAdjust] == TimeAdjustOn
+	raised, err := RaisedPriorities(ctx, q, now)
+	if err != nil {
+		return ReadyResult{}, err
 	}
 
 	keys, err := queryBeads(ctx, q, "SELECT "+readyKeyCols+" "+fromWhere, args, f.Label)
 	if err != nil {
-		return nil, nil, 0, err
+		return ReadyResult{}, err
 	}
+	res := ReadyResult{Eff: raised, Adjusted: adjusted}
 	filtered := keys
-	slices.SortFunc(filtered, func(a, b Bead) int { return compareEffective(raised, a, b) })
+	if adjusted {
+		adj, err := TimeAdjust(ctx, q, now, coef, raised, keys)
+		if err != nil {
+			return ReadyResult{}, err
+		}
+		res.Eff, res.Demand, res.Held = adj.Eff, adj.Demand, len(adj.Held)
+		filtered = slices.DeleteFunc(keys, func(b Bead) bool { return adj.Held[b.ID] })
+		slices.SortFunc(filtered, func(a, b Bead) int { return compareAdjusted(adj, a, b) })
+	} else {
+		res.Demand, err = CandidateDemand(ctx, q, now, coef, withinLimitTiers(raised, keys, f.Limit))
+		if err != nil {
+			return ReadyResult{}, err
+		}
+		slices.SortFunc(filtered, func(a, b Bead) int { return compareEffective(raised, res.Demand, a, b) })
+	}
 
-	total := len(filtered)
-	if f.Limit > 0 && f.Limit < total {
+	res.Total = len(filtered)
+	if f.Limit > 0 && f.Limit < res.Total {
 		filtered = filtered[:f.Limit]
 	}
-	beads, err := beadsInOrder(ctx, q, filtered)
-	return beads, raised, total, err
+	res.Beads, err = beadsInOrder(ctx, q, filtered)
+	return res, err
+}
+
+func withinLimitTiers(raised map[string]EffectivePriority, keys []Bead, limit int) []Bead {
+	if limit <= 0 || limit >= len(keys) {
+		return keys
+	}
+	prios := make([]int, len(keys))
+	for i, b := range keys {
+		prios[i] = effectiveOf(raised, b.ID, b.Priority)
+	}
+	cutoff := slices.Sorted(slices.Values(prios))[limit-1]
+	out := make([]Bead, 0, limit)
+	for i, b := range keys {
+		if prios[i] <= cutoff {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 const readyKeyCols = `id, namespace, '', '', status, priority, type, claimed_by, labels, created_at, updated_at, closed_at, reasoning_depth, NULL`
@@ -196,6 +247,23 @@ type BlockedBead struct {
 	Bead
 
 	Blockers []Blocker
+
+	HeldSince string
+}
+
+func heldReadyBeads(ctx context.Context, q Querier, f ReadyFilter, now string, coef Coefficients, raised map[string]EffectivePriority) (TimeAdjustment, []Bead, error) {
+	fromWhere, args := ReadyWhere(f)
+	keys, err := queryBeads(ctx, q, "SELECT "+readyKeyCols+" "+fromWhere, args, f.Label)
+	if err != nil {
+		return TimeAdjustment{}, nil, err
+	}
+	adj, err := TimeAdjust(ctx, q, now, coef, raised, keys)
+	if err != nil {
+		return TimeAdjustment{}, nil, err
+	}
+	held := slices.DeleteFunc(keys, func(b Bead) bool { return !adj.Held[b.ID] })
+	beads, err := beadsInOrder(ctx, q, held)
+	return adj, beads, err
 }
 
 func BlockedBeadsEffective(ctx context.Context, q Querier, f ReadyFilter) ([]BlockedBead, map[string]EffectivePriority, int, error) {
@@ -205,26 +273,47 @@ func BlockedBeadsEffective(ctx context.Context, q Querier, f ReadyFilter) ([]Blo
 	fromWhere += ` AND type != ?`
 	args = append(args, BeadTypeGate)
 
-	raised, err := RaisedPriorities(ctx, q, nowOrDefault(f.Now))
+	now := nowOrDefault(f.Now)
+	raised, err := RaisedPriorities(ctx, q, now)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	coef, err := LoadCoefficients(ctx, q)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+	adjusted := coef[CoefficientTimeAdjust] == TimeAdjustOn
+
+	beads, _, err := runListQuery(ctx, q, fromWhere, args, f.Label, 0, SortPriority)
 	if err != nil {
 		return nil, nil, 0, err
 	}
 
-	limit := f.Limit
-	if len(raised) > 0 {
-		limit = 0
-	}
-	beads, total, err := runListQuery(ctx, q, fromWhere, args, f.Label, limit, SortPriority)
-	if err != nil {
-		return nil, nil, 0, err
-	}
-
+	var total int
 	out := make([]BlockedBead, 0, len(beads))
 	for _, b := range beads {
 		out = append(out, BlockedBead{Bead: b})
 	}
-	if limit == 0 {
-		slices.SortStableFunc(out, func(a, b BlockedBead) int { return compareEffective(raised, a.Bead, b.Bead) })
+	if adjusted {
+		adj, held, err := heldReadyBeads(ctx, q, f, now, coef, raised)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		for _, b := range held {
+			out = append(out, BlockedBead{Bead: b, HeldSince: FormatTime(adj.HeldSince[b.ID])})
+		}
+		slices.SortStableFunc(out, func(a, b BlockedBead) int { return compareAdjusted(adj, a.Bead, b.Bead) })
+		raised = adj.Eff
+		total = len(out)
+		if f.Limit > 0 && f.Limit < total {
+			out = out[:f.Limit]
+		}
+	} else {
+		demand, err := CandidateDemand(ctx, q, now, coef, beads)
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		slices.SortStableFunc(out, func(a, b BlockedBead) int { return compareEffective(raised, demand, a.Bead, b.Bead) })
 		total = len(out)
 		if f.Limit > 0 && f.Limit < total {
 			out = out[:f.Limit]
@@ -232,6 +321,9 @@ func BlockedBeadsEffective(ctx context.Context, q Querier, f ReadyFilter) ([]Blo
 	}
 
 	for i := range out {
+		if out[i].HeldSince != "" {
+			continue
+		}
 		blockers, err := ActiveBlockers(ctx, q, out[i].ID)
 		if err != nil {
 			return nil, nil, 0, err

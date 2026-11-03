@@ -15,6 +15,8 @@ import (
 
 const FileName = "config.json"
 
+const minIDShortLen = 3
+
 type Config struct {
 	RetentionDays int
 
@@ -39,7 +41,7 @@ func (c *Config) ShortLenOr(def int) int {
 	if c == nil {
 		return def
 	}
-	return max(cmp.Or(c.IDShortLen, def), 3)
+	return max(cmp.Or(c.IDShortLen, def), minIDShortLen)
 }
 
 func (c *Config) RequireMilestone() bool {

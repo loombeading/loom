@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -502,5 +503,122 @@ func TestAdjudicateNoteTitleTruncation(t *testing.T) {
 	want := "判定ノート引き継ぎ: " + string(wantRunes) + "…"
 	if got != want {
 		t.Errorf("adjudicateNoteTitle(70 runes) = %q, want %q", got, want)
+	}
+}
+
+func candidateGates(t *testing.T, db *sql.DB, id string) []string {
+	t.Helper()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	got, err := candidateGatesForBead(context.Background(), tx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestCandidateGatesForBead(t *testing.T) {
+	newGate := func(t *testing.T, db *sql.DB, target, now string) string {
+		t.Helper()
+		return mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "s"}, Namespace: "lm", Actor: "u", Now: now})
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(t *testing.T, db *sql.DB, target string) []string
+	}{
+		{"no link", func(*testing.T, *sql.DB, string) []string { return nil }},
+		{"open gate", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			return []string{newGate(t, db, target, "n1")}
+		}},
+		{"closed gate", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			g := newGate(t, db, target, "n1")
+			mustExec(t, db, `UPDATE beads SET status = ? WHERE id = ?`, StatusClosed, g)
+			return nil
+		}},
+		{"cancelled gate", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			g := newGate(t, db, target, "n1")
+			mustExec(t, db, `UPDATE beads SET status = ? WHERE id = ?`, StatusCancelled, g)
+			return nil
+		}},
+		{"open non-gate blocker", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			other := newBead(t, db, "n1")
+			tx, err := db.BeginTx(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mustNoErr(t, AddLink(context.Background(), tx, "u", target, other, BlocksDepType, "n2", "r"))
+			mustNoErr(t, tx.Commit())
+			return nil
+		}},
+		{"removed link", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			g := newGate(t, db, target, "n1")
+			mustNoErr(t, mustRemoveLink(t, db, target, g, BlocksDepType))
+			return nil
+		}},
+		{"several open gates in id order", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			ids := []string{newGate(t, db, target, "n1"), newGate(t, db, target, "n2"), newGate(t, db, target, "n3")}
+			slices.Sort(ids)
+			return ids
+		}},
+		{"open gate and closed gate", func(t *testing.T, db *sql.DB, target string) []string {
+			t.Helper()
+			open := newGate(t, db, target, "n1")
+			closed := newGate(t, db, target, "n2")
+			mustExec(t, db, `UPDATE beads SET status = ? WHERE id = ?`, StatusClosed, closed)
+			return []string{open}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := testDB(t)
+			target := newBead(t, db, "n0")
+			want := tc.setup(t, db, target)
+			got := candidateGates(t, db, target)
+			if !slices.Equal(got, want) {
+				t.Fatalf("candidateGatesForBead = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestAutoResolveGatesForBeadResolvesOnlyMetGates(t *testing.T) {
+	db := testDB(t)
+	target := newBead(t, db, "n0")
+	other := newBead(t, db, "n0")
+	met := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "met"}, Namespace: "lm", Actor: "u", Now: "n1"})
+	unmet := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target, other}, Fields: GateFields{Subject: "unmet"}, Namespace: "lm", Actor: "u", Now: "n2"})
+	mustNoErr(t, mustCloseBead(t, db, target, "n3"))
+
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := AutoResolveGatesForBead(context.Background(), tx, target, "u", "n4")
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatal(err)
+	}
+	mustNoErr(t, tx.Commit())
+
+	if !slices.Equal(resolved, []string{met}) {
+		t.Fatalf("resolved = %v, want [%s]", resolved, met)
+	}
+	var metStatus, unmetStatus string
+	if err := db.QueryRowContext(t.Context(), `SELECT status FROM beads WHERE id = ?`, met).Scan(&metStatus); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(t.Context(), `SELECT status FROM beads WHERE id = ?`, unmet).Scan(&unmetStatus); err != nil {
+		t.Fatal(err)
+	}
+	if metStatus != StatusClosed || unmetStatus != StatusOpen {
+		t.Fatalf("gate statuses = met:%s unmet:%s, want closed/open", metStatus, unmetStatus)
 	}
 }

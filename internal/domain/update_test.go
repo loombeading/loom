@@ -17,6 +17,39 @@ func mustUpdate(t *testing.T, db *sql.DB, in UpdateInput) error {
 	return err
 }
 
+func mustUpdateAutoResolve(t *testing.T, db *sql.DB, in UpdateInput) []string {
+	t.Helper()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, resolved, err := UpdateBeadAutoResolve(context.Background(), tx, in)
+	if err != nil {
+		_ = tx.Rollback()
+		t.Fatalf("UpdateBeadAutoResolve: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func TestUpdateBeadAutoResolveCancelResolvesGatesOnlyWhenAllBlockedTerminal(t *testing.T) {
+	db := testDB(t)
+	target := newBead(t, db, "n0")
+	other := newBead(t, db, "n0")
+	gateOnly := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target}, Fields: GateFields{Subject: "x"}, Namespace: "lm", Actor: "u", Now: "n1"})
+	gateBoth := mustGateCreate(t, db, GateCreateInput{Blocks: []string{target, other}, Fields: GateFields{Subject: "y"}, Namespace: "lm", Actor: "u", Now: "n1"})
+
+	if got := mustUpdateAutoResolve(t, db, UpdateInput{Priority: -1, ID: target, AddLabels: []string{"x"}, Actor: "u", Now: "n2"}); len(got) != 0 {
+		t.Fatalf("non-terminal update auto-resolved %v, want none", got)
+	}
+	got := mustUpdateAutoResolve(t, db, UpdateInput{Priority: -1, ID: target, Cancel: true, Reason: "r", Actor: "u", Now: "n3"})
+	if len(got) != 1 || got[0] != gateOnly {
+		t.Fatalf("cancel auto-resolved %v, want only %q (not %q)", got, gateOnly, gateBoth)
+	}
+}
+
 func mustUpdateWithWarnings(t *testing.T, db *sql.DB, in UpdateInput) ([]string, error) {
 	t.Helper()
 	tx, err := db.BeginTx(context.Background(), nil)

@@ -1,28 +1,28 @@
 class Lm < Formula
   desc "Local task tracker for AI coding agents"
   homepage "https://github.com/loombeading/loom"
-  version "0.2610.1"
+  version "0.2611.0"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
-      url "https://github.com/loombeading/loom/releases/download/v0.2610.1/lm_darwin_arm64"
-      sha256 "9324d7408514d81eafe8cc70c0336f216332fa95461f7cf4a01d2a07c0bf07da"
+      url "https://github.com/loombeading/loom/releases/download/v0.2611.0/lm_darwin_arm64"
+      sha256 "93f009dc6fe8c42f5764edb222f79c2d882f3b5485e41eb540ea76423fe4cb6b"
     end
     on_intel do
-      url "https://github.com/loombeading/loom/releases/download/v0.2610.1/lm_darwin_amd64"
-      sha256 "f8a22e29c104b58c38aeb8efb9ef5b329ff12ecbf4605d998086ed4f7de2a1a2"
+      url "https://github.com/loombeading/loom/releases/download/v0.2611.0/lm_darwin_amd64"
+      sha256 "7e5efac098e4ae013451db9f870ef29efe8aab43ffcdaa744811088445a4a5e5"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/loombeading/loom/releases/download/v0.2610.1/lm_linux_arm64"
-      sha256 "31f6e97015c4b809241cadc567f95b0541cbd1503d62db25180bb47f81bd8792"
+      url "https://github.com/loombeading/loom/releases/download/v0.2611.0/lm_linux_arm64"
+      sha256 "1722bd7493ef4aa411717b2ff37b862f3157867a4f5b1a8e13a1a7a24e3492c9"
     end
     on_intel do
-      url "https://github.com/loombeading/loom/releases/download/v0.2610.1/lm_linux_amd64"
-      sha256 "a20da4b29d83af6eef11a25440106a7c613ad4b9166f5c469f68c4f0b1865118"
+      url "https://github.com/loombeading/loom/releases/download/v0.2611.0/lm_linux_amd64"
+      sha256 "67be6152ca67a13ee6243f24fc25fdf252ac80a2c7233b15d3fc0ee4fcb90375"
     end
   end
 
@@ -31,6 +31,6 @@ class Lm < Formula
   end
 
   test do
-    assert_match "lm v0.2610.1 ", shell_output("#{bin}/lm version")
+    assert_match "lm v0.2611.0 ", shell_output("#{bin}/lm version")
   end
 end

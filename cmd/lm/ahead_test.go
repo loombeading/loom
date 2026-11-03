@@ -350,7 +350,7 @@ func TestAheadReleasesCountsDescendants(t *testing.T) {
 	if !strings.Contains(body[1], "q4-release") {
 		t.Errorf("## Milestones line = %q, want the q4-release Epic", body[1])
 	}
-	if want := "  milestone=2026-Q4  ready=2 wip=1 course=1 gate=1 remaining=5  close/日=0.0〜0.3  残り日数=15.0日〜見込み無し  eta=発散  Gate 待ち"; !strings.HasSuffix(body[1], want) {
+	if want := "  milestone=2026-Q4  ready=2 wip=1 course=1 gate=1 remaining=5  close/日=0.0〜0.3  残り日数=15.0日〜見込み無し  eta=発散  spent=0 est_remaining=n/a burn=n/a ratio=n/a  Gate 待ち"; !strings.HasSuffix(body[1], want) {
 		t.Errorf("## Milestones line = %q, want suffix %q", body[1], want)
 	}
 	if !strings.Contains(out, "- Gate waiting: 0 tokens (2 beads)\n- Milestones: 1") {
@@ -429,7 +429,7 @@ func TestAheadReleasesETANonDiverging(t *testing.T) {
 	if !strings.Contains(body[1], "  close/日=") || !strings.Contains(body[1], "残り日数=") {
 		t.Errorf("## Milestones line = %q, want close/日 and 残り日数", body[1])
 	}
-	etaPattern := regexp.MustCompile(`  eta=\d{4}-\d{2}-\d{2} \d{2}:\d{2} JST〜\d{4}-\d{2}-\d{2} \d{2}:\d{2} JST$`)
+	etaPattern := regexp.MustCompile(`  eta=\d{4}-\d{2}-\d{2} \d{2}:\d{2} JST〜\d{4}-\d{2}-\d{2} \d{2}:\d{2} JST  spent=0 est_remaining=n/a burn=n/a ratio=n/a$`)
 	if !etaPattern.MatchString(body[1]) {
 		t.Errorf("## Milestones line = %q, want a non-diverging eta= range (closed=20(PR 15) should outrun 2 remaining/created)", body[1])
 	}
@@ -467,7 +467,7 @@ func TestAheadReleasesGateCountsHumanOnlyUnlessAll(t *testing.T) {
 	if len(body) != 2 {
 		t.Fatalf("## Milestones body = %q, want the Window line and exactly the q4-release line", body)
 	}
-	if want := "ready=0 wip=0 course=0 gate=2 remaining=4  close/日=0.0〜0.0  残り日数=見込み無し  eta=発散  Gate 待ち"; !strings.HasSuffix(body[1], want) {
+	if want := "ready=0 wip=0 course=0 gate=2 remaining=4  close/日=0.0〜0.0  残り日数=見込み無し  eta=発散  spent=0 est_remaining=n/a burn=n/a ratio=n/a  Gate 待ち"; !strings.HasSuffix(body[1], want) {
 		t.Errorf("## Milestones line = %q, want suffix %q", body[1], want)
 	}
 
@@ -479,7 +479,7 @@ func TestAheadReleasesGateCountsHumanOnlyUnlessAll(t *testing.T) {
 	if len(bodyAll) != 2 {
 		t.Fatalf("## Milestones (--all) body = %q, want the Window line and exactly the q4-release line", bodyAll)
 	}
-	if want := "ready=0 wip=0 course=0 gate=4 remaining=4  close/日=0.0〜0.0  残り日数=見込み無し  eta=発散  Gate 待ち"; !strings.HasSuffix(bodyAll[1], want) {
+	if want := "ready=0 wip=0 course=0 gate=4 remaining=4  close/日=0.0〜0.0  残り日数=見込み無し  eta=発散  spent=0 est_remaining=n/a burn=n/a ratio=n/a  Gate 待ち"; !strings.HasSuffix(bodyAll[1], want) {
 		t.Errorf("## Milestones (--all) line = %q, want suffix %q", bodyAll[1], want)
 	}
 }
@@ -510,7 +510,7 @@ func TestAheadReleasesETAFloorIgnoresGateKindAndAllFlag(t *testing.T) {
 	}
 
 	wantFloor := time.Date(2099, 1, 1, 0, 0, 0, 0, time.Local)
-	want := "  eta=" + wantFloor.Format("2006-01-02 15:04 JST") + "〜" + wantFloor.Format("2006-01-02 15:04 JST") + "  judge=1"
+	want := "  eta=" + wantFloor.Format("2006-01-02 15:04 JST") + "〜" + wantFloor.Format("2006-01-02 15:04 JST") + "  spent=0 est_remaining=n/a burn=n/a ratio=n/a  judge=1"
 	for _, c := range []struct {
 		args     []string
 		wantGate string
@@ -589,7 +589,7 @@ func TestAheadMilestoneHeldByOwnGate(t *testing.T) {
 	if !strings.Contains(after, "gate=0 remaining=1") {
 		t.Errorf("after-ms line = %q, want an external Gate on the milestone itself left out of gate= by default", after)
 	}
-	if !strings.HasSuffix(after, "  eta="+wantFloor+"〜"+wantFloor) {
+	if !strings.HasSuffix(after, "  eta="+wantFloor+"〜"+wantFloor+"  spent=0 est_remaining=n/a burn=n/a ratio=n/a") {
 		t.Errorf("after-ms line = %q, want both ends raised to the wait:after: time %s of the Gate on the milestone itself", after, wantFloor)
 	}
 
@@ -895,7 +895,7 @@ func TestAheadReleasesOrderNamesAndNamespace(t *testing.T) {
 	if !strings.HasPrefix(body[0], "- Window: 72h closed=") {
 		t.Errorf("## Milestones body[0] = %q, want the Window line", body[0])
 	}
-	if !strings.Contains(body[1], "high-release") || !strings.HasSuffix(body[1], "  milestone=c  ready=0 wip=0 course=0 gate=0 remaining=0") {
+	if !strings.Contains(body[1], "high-release") || !strings.HasSuffix(body[1], "  milestone=c  ready=0 wip=0 course=0 gate=0 remaining=0  spent=0 est_remaining=n/a burn=n/a ratio=n/a") {
 		t.Errorf("## Milestones first line = %q, want high-release with no descendants", body[1])
 	}
 	if !strings.Contains(body[2], "low-release") || !strings.Contains(body[2], "  milestone=a,b  ") {
